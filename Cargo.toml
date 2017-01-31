@@ -17,11 +17,11 @@ name = "dds-info"
 path = "src/main.rs"
 
 [dependencies]
-clap = "*"
-prettytable-rs = "*"
+clap = "2.20.1"
+prettytable-rs = "0.6.6"
 
 [dev-dependencies]
-image = "*"
+image = "0.12.2"
 
 [[example]]
 name = "convert"
