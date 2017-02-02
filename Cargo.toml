@@ -1,11 +1,11 @@
 [package]
 name = "dds-rs"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["mechaxl"]
 description = "Decodes DirectDraw Surface files"
 repository = "https://gitlab.com/mechaxl/dds-rs"
 keywords = ["dds", "directdraw"]
-categories = ["games", "multimedia::images"]
+categories = ["game-engines", "multimedia::images"]
 license = "LGPL-3.0"
 
 [lib]
