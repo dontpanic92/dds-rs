@@ -1,7 +1,27 @@
 //! Handles decoding (and someday encoding) DirectDraw Surface files.
-//! General TODOs:
-//! - Remove use of unsafe
-//! - Handle DXT3/5, etc
+//!
+//! # Examples
+//!
+//! ```rust
+//! extern crate dds;
+//!
+//! use std::fs::File;
+//! use std::io::BufReader;
+//! use std::path::Path;
+//!
+//! use dds::DDS;
+//!
+//! fn main() {
+//!     let file = File::open(Path::new("foo.dds")).unwrap();
+//!     let mut reader = BufReader::new(file);
+//!
+//!     let dds = DDS::decode(&mut reader).unwrap();
+//! }
+//! ```
+
+// General TODOs:
+// - Remove use of unsafe
+// - Handle DXT3/5, etc
 
 use std::cmp;
 use std::fmt;
@@ -9,6 +29,10 @@ use std::io::Read;
 use std::mem;
 
 
+/// Pixel information as represented in the DDS file
+///
+/// Direct translation of struct found here:
+/// https://msdn.microsoft.com/en-us/library/bb943984.aspx
 #[repr(C)]
 #[derive(Debug)]
 pub struct RawPixelFormat {
@@ -23,6 +47,10 @@ pub struct RawPixelFormat {
 }
 
 
+/// Header as represented in the DDS file
+///
+/// Direct translation of struct found here:
+/// https://msdn.microsoft.com/en-us/library/bb943982.aspx
 #[repr(C)]
 #[derive(Debug)]
 pub struct RawHeader {
@@ -43,7 +71,10 @@ pub struct RawHeader {
 }
 
 
-// Convenience enum for storing common pixel formats
+/// Convenience enum for storing common pixel formats
+///
+/// See here for more information about the common formats:
+/// https://msdn.microsoft.com/en-us/library/bb943991.aspx
 #[derive(Debug)]
 pub enum PixelFormat {
     A1R5G5B5,
@@ -74,8 +105,8 @@ impl fmt::Display for PixelFormat {
     }
 }
 
-// Represents the compression format of a DDS file,
-// aka the four-cc bytes.
+/// Represents the compression format of a DDS file,
+/// aka the four-cc bytes.
 #[derive(Debug)]
 pub enum Compression {
     DXT1,
@@ -103,26 +134,26 @@ impl fmt::Display for Compression {
     }
 }
 
-// Represents a parsed DDS header. Has several convenience attributes,
-// as well as a reference to the raw header.
+/// Represents a parsed DDS header. Has several convenience attributes,
+/// as well as a reference to the raw header.
 #[derive(Debug)]
 pub struct Header {
-    // Height of the main image
+    /// Height of the main image
     pub height: u32,
 
-    // Width of the main image
+    /// Width of the main image
     pub width: u32,
 
-    // How many levels of mipmaps there are
+    /// How many levels of mipmaps there are
     pub mipmap_count: u32,
 
-    // Compression type used
+    /// Compression type used
     pub compression: Compression,
 
-    // The pixel format used
+    /// The pixel format used
     pub pixel_format: PixelFormat,
 
-    // Raw header that byte-matches the DDS header format
+    /// Raw header that byte-matches the DDS header format
     pub raw_header: RawHeader,
 }
 
@@ -140,7 +171,7 @@ impl Header {
             .collect::<Vec<_>>()
     }
 
-    // Returns raw header
+    /// Returns raw header
     pub fn get_raw(&self) -> &RawHeader {
         &self.raw_header
     }
@@ -149,24 +180,15 @@ impl Header {
     fn get_pixel_bytes(&self) -> usize {
         self.raw_header.pixel_format.rgb_bit_count as usize / 8
     }
-
-    pub fn get_rgb_info(&self) -> [u32; 5] {
-        [
-            self.raw_header.pixel_format.rgb_bit_count,
-            self.raw_header.pixel_format.red_bit_mask,
-            self.raw_header.pixel_format.green_bit_mask,
-            self.raw_header.pixel_format.blue_bit_mask,
-            self.raw_header.pixel_format.alpha_bit_mask,
-        ]
-    }
 }
 
 
+/// Represents a parsed DDS file
 pub struct DDS {
-    // Parsed header
+    /// The parsed DDS header
     pub header: Header,
 
-    // Mipmap layers
+    /// Mipmap layers
     pub layers: Vec<Vec<[u8; 4]>>,
 }
 
@@ -200,7 +222,7 @@ impl DDS {
         }
     }
 
-    // Parses a `Header` object from a buffer
+    /// Parses a `Header` object from a raw `u8` buffer.
     pub fn parse_header<R: Read>(buf: &mut R) -> Option<Header> {
         let mut magic_buf = [0; 4];
         let mut header_buf = [0u8; 124];
@@ -359,8 +381,8 @@ impl DDS {
         .collect::<Vec<_>>()
     }
 
-    // Converts a buffer into a series of mipmap images.
-    // Handles uncompressed and DXT1-compressed images for now.
+    /// Decodes a buffer into a header and a series of mipmap images.
+    /// Handles uncompressed and DXT1-compressed images for now.
     pub fn decode<R: Read>(buf: &mut R) -> Option<DDS> {
         let header = DDS::parse_header(buf).unwrap();
 

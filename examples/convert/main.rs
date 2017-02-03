@@ -1,5 +1,6 @@
 //! Demonstrates usage of `dds-rs` by converting each mipmap
 //! in a DDS file to a png
+
 extern crate clap;
 extern crate dds;
 extern crate image;

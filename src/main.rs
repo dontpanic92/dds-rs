@@ -26,7 +26,6 @@ fn main() {
     let header = DDS::parse_header(&mut reader).unwrap();
 
     let raw = header.get_raw();
-    let rgb_info = header.get_rgb_info();
 
 
     ptable!(
@@ -55,11 +54,11 @@ fn main() {
         [" - CUBEMAP_NEGATIVEZ", raw.caps2 & 0x8000 != 0],
         [" - VOLUME", raw.caps2 & 0x200_000 != 0],
         ["Pixel Format", header.pixel_format],
-        ["Bits per pixel", rgb_info[0]],
-        ["Red Mask", format!("{:#010X}", rgb_info[1])],
-        ["Blue Mask", format!("{:#010X}", rgb_info[2])],
-        ["Green Mask", format!("{:#010X}", rgb_info[3])],
-        ["Alpha Mask", format!("{:#010X}", rgb_info[4])],
+        ["Bits per pixel", raw.pixel_format.rgb_bit_count],
+        ["Red Mask", format!("{:#010X}", raw.pixel_format.red_bit_mask)],
+        ["Blue Mask", format!("{:#010X}", raw.pixel_format.blue_bit_mask)],
+        ["Green Mask", format!("{:#010X}", raw.pixel_format.green_bit_mask)],
+        ["Alpha Mask", format!("{:#010X}", raw.pixel_format.alpha_bit_mask)],
         ["Pixel Format Flags", format!("{:#010X}", raw.pixel_format.flags)],
         [" - ALPHAPIXELS", raw.pixel_format.flags & 0x1 != 0],
         [" - ALPHA", raw.pixel_format.flags & 0x2 != 0],
