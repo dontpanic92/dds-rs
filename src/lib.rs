@@ -381,6 +381,82 @@ impl DDS {
         .collect::<Vec<_>>()
     }
 
+    fn decode_dxt3(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
+        let layer_sizes = header.get_layer_sizes();
+
+        // Take the vec of layer sizes and map to a vec of layers
+        layer_sizes
+        .iter()
+        .map(|&(height, width)| {
+            let h = cmp::max(height, 4);
+            let w = cmp::max(width, 4);
+
+            data_buf
+            .drain(..h * w)
+            .collect::<Vec<_>>()
+            .chunks(16)
+            .flat_map(|bytes| {
+                let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
+                let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
+
+                bytes[12..]
+                .iter()
+                .rev()
+                .enumerate()
+                .flat_map(|(i, &code)| {
+                    (0..4)
+                    .map(|j| {
+                        let lookup = |c0: u32, c1| -> u32 {
+                            match (code >> (j * 2)) & 0x3 {
+                                0 => c0,
+                                1 => c1,
+                                2 => (2 * c0 + c1) / 3,
+                                3 => (c0 + 2 * c1) / 3,
+                                _ => unreachable!(),
+                            }
+                        };
+
+                        let alpha_nibble = (bytes[2 * (3 - i) + j / 2] >> (4 * (j % 2))) & 0xF;
+
+                        let red0 = (color0 & 0xF800) >> 11;
+                        let red1 = (color1 & 0xF800) >> 11;
+                        let green0 = (color0 & 0x7E0) >> 5;
+                        let green1 = (color1 & 0x7E0) >> 5;
+                        let blue0 = color0 & 0x1F;
+                        let blue1 = color1 & 0x1F;
+
+                        [
+                            lookup(8 * red0, 8 * red1) as u8,
+                            lookup(4 * green0, 4 * green1) as u8,
+                            lookup(8 * blue0, 8 * blue1) as u8,
+                            16 * alpha_nibble,
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+            .chunks(4 * w)
+            .flat_map(|p| {
+                let mut pixels = Vec::new();
+
+                for i in (0..4).rev() {
+                    for j in 0..w / 4 {
+                        pixels.push(p[(i + j * 4) * 4 + 0]);
+                        pixels.push(p[(i + j * 4) * 4 + 1]);
+                        pixels.push(p[(i + j * 4) * 4 + 2]);
+                        pixels.push(p[(i + j * 4) * 4 + 3]);
+                    }
+                }
+
+                pixels
+            })
+            .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+    }
+
     /// Decodes a buffer into a header and a series of mipmap images.
     /// Handles uncompressed and DXT1-compressed images for now.
     pub fn decode<R: Read>(buf: &mut R) -> Option<DDS> {
@@ -395,6 +471,9 @@ impl DDS {
             }
             Compression::DXT1 => {
                 DDS::decode_dxt1(&header, &mut data_buf)
+            }
+            Compression::DXT3 => {
+                DDS::decode_dxt3(&header, &mut data_buf)
             }
             _ => {
                 return None;
