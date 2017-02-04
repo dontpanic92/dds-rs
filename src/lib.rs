@@ -457,8 +457,112 @@ impl DDS {
         .collect::<Vec<_>>()
     }
 
+    fn decode_dxt5(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
+        let layer_sizes = header.get_layer_sizes();
+
+        // Take the vec of layer sizes and map to a vec of layers
+        layer_sizes
+        .iter()
+        .map(|&(height, width)| {
+            let h = cmp::max(height, 4);
+            let w = cmp::max(width, 4);
+
+            data_buf
+            .drain(..h * w)
+            .collect::<Vec<_>>()
+            .chunks(16)
+            .flat_map(|bytes| {
+                let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
+                let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
+
+                let alpha0 = bytes[0] as u32;
+                let alpha1 = bytes[1] as u32;
+
+                // Convert 6 u8's into a single 48 bit number
+                let alpha_info = bytes[2..8]
+                .iter()
+                .rev()
+                .enumerate()
+                .fold(0u64, |memo, (i, &x)| memo + ((x as u64) << 8 * i) as u64);
+
+                bytes[12..]
+                .iter()
+                .rev()
+                .enumerate()
+                .flat_map(|(i, &code)| {
+                    (0..4)
+                    .map(|j| {
+                        let lookup = |c0: u32, c1| -> u32 {
+                            match (code >> (j * 2)) & 0x3 {
+                                0 => c0,
+                                1 => c1,
+                                2 => (2 * c0 + c1) / 3,
+                                3 => (c0 + 2 * c1) / 3,
+                                _ => unreachable!(),
+                            }
+                        };
+
+                        let red0 = (color0 & 0xF800) >> 11;
+                        let red1 = (color1 & 0xF800) >> 11;
+                        let green0 = (color0 & 0x7E0) >> 5;
+                        let green1 = (color1 & 0x7E0) >> 5;
+                        let blue0 = color0 & 0x1F;
+                        let blue1 = color1 & 0x1F;
+
+                        let alpha = match (alpha0 <= alpha1, alpha_info >> (4 * i + j) & 0x07) {
+                            (true, 0) => alpha0,
+                            (true, 1) => alpha1,
+                            (true, 2) => (6 * alpha0 + 1 * alpha1) / 7,
+                            (true, 3) => (5 * alpha0 + 2 * alpha1) / 7,
+                            (true, 4) => (4 * alpha0 + 3 * alpha1) / 7,
+                            (true, 5) => (3 * alpha0 + 4 * alpha1) / 7,
+                            (true, 6) => (2 * alpha0 + 5 * alpha1) / 7,
+                            (true, 7) => (1 * alpha0 + 6 * alpha1) / 7,
+                            (false, 0) => alpha0,
+                            (false, 1) => alpha1,
+                            (false, 2) => (4 * alpha0 + 1 * alpha1) / 5,
+                            (false, 3) => (3 * alpha0 + 2 * alpha1) / 5,
+                            (false, 4) => (2 * alpha0 + 3 * alpha1) / 5,
+                            (false, 5) => (1 * alpha0 + 4 * alpha1) / 5,
+                            (false, 6) => 0,
+                            (false, 7) => 255,
+                            i @ _ => unreachable!(format!("{:?}", i)),
+                        };
+
+                        [
+                            lookup(8 * red0, 8 * red1) as u8,
+                            lookup(4 * green0, 4 * green1) as u8,
+                            lookup(8 * blue0, 8 * blue1) as u8,
+                            alpha as u8,
+                        ]
+                    })
+                    .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+            .chunks(4 * w)
+            .flat_map(|p| {
+                let mut pixels = Vec::new();
+
+                for i in (0..4).rev() {
+                    for j in 0..w / 4 {
+                        pixels.push(p[(i + j * 4) * 4 + 0]);
+                        pixels.push(p[(i + j * 4) * 4 + 1]);
+                        pixels.push(p[(i + j * 4) * 4 + 2]);
+                        pixels.push(p[(i + j * 4) * 4 + 3]);
+                    }
+                }
+
+                pixels
+            })
+            .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+    }
+
     /// Decodes a buffer into a header and a series of mipmap images.
-    /// Handles uncompressed and DXT1-compressed images for now.
+    /// Handles uncompressed and DXT1-5 compressed images.
     pub fn decode<R: Read>(buf: &mut R) -> Option<DDS> {
         let header = DDS::parse_header(buf).unwrap();
 
@@ -474,6 +578,9 @@ impl DDS {
             }
             Compression::DXT3 => {
                 DDS::decode_dxt3(&header, &mut data_buf)
+            }
+            Compression::DXT5 => {
+                DDS::decode_dxt5(&header, &mut data_buf)
             }
             _ => {
                 return None;
