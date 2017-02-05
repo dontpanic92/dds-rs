@@ -21,7 +21,7 @@
 
 // General TODOs:
 // - Remove use of unsafe
-// - Handle DXT3/5, etc
+// - Handle Cubemaps/Volumes
 
 use std::cmp;
 use std::fmt;
@@ -275,10 +275,204 @@ impl DDS {
         .collect()
     }
 
-    // Handles decoding a DXT1-compressed buffer into a series of mipmap images
+    // Handles decoding a DXT1-compressed 64-bit buffer into 16 pixels
+    fn bytes_to_pixels_dxt1(bytes: &[u8]) -> Vec<[u8; 4]> {
+        // Convert to `u32` to allow overflow for arithmetic below
+        let color0 = (((bytes[1] as u16) << 8) + bytes[0] as u16) as u32;
+        let color1 = (((bytes[3] as u16) << 8) + bytes[2] as u16) as u32;
+
+        // Iterate through each pair of bits in each `code` byte to
+        // determine the color for each pixel
+        bytes[4..]
+        .iter()
+        .rev()
+        .flat_map(|&code| {
+            (0..4)
+            .map(|i| {
+                // Implements this lookup table for calculating pixel colors.
+                // Used on a per channel basis, except for calculating
+                // `color0 > color1`.
+                //
+                // code | color0 > color1 | color0 <= color1
+                // -----------------------------------------
+                //   0  |       c0        |       c0
+                //   1  |       c1        |       c1
+                //   2  | (2*c0 + c1) / 3 |  (c0 + c1) / 2
+                //   3  | (c0 + 2*c1) / 3 |      black
+                let lookup = |c0: u32, c1| -> u32 {
+                    match (color0 > color1, (code >> (i * 2)) & 0x3) {
+                        ( true, 0) => c0,
+                        ( true, 1) => c1,
+                        ( true, 2) => (2 * c0 + c1) / 3,
+                        ( true, 3) => (c0 + 2 * c1) / 3,
+                        (false, 0) => c0,
+                        (false, 1) => c1,
+                        (false, 2) => (c0 + c1) / 2,
+                        (false, 3) => 0,
+                        _ => unreachable!(),
+                    }
+                };
+
+                let red0 = (color0 & 0xF800) >> 11;
+                let red1 = (color1 & 0xF800) >> 11;
+                let green0 = (color0 & 0x7E0) >> 5;
+                let green1 = (color1 & 0x7E0) >> 5;
+                let blue0 = color0 & 0x1F;
+                let blue1 = color1 & 0x1F;
+
+                // After colors have been calculated, inflate from 5/6-bit
+                // to 8-bit by multipling by 8/4, respectively. No alpha
+                // channel is used in DXT1 compression, so set to 100%
+                // across the board.
+                [
+                    lookup(8 * red0, 8 * red1) as u8,
+                    lookup(4 * green0, 4 * green1) as u8,
+                    lookup(8 * blue0, 8 * blue1) as u8,
+                    255
+                ]
+            })
+            .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+    }
+
+    // Handles decoding a DXT3-compressed 128-bit buffer into 16 pixels
+    fn bytes_to_pixels_dxt3(bytes: &[u8]) -> Vec<[u8; 4]> {
+        // Convert to `u32` to allow overflow for arithmetic below
+        let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
+        let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
+
+        // Iterate through each pair of bits in each `code` byte to
+        // determine the color for each pixel
+        bytes[12..]
+        .iter()
+        .rev()
+        .enumerate()
+        .flat_map(|(i, &code)| {
+            (0..4)
+            .map(|j| {
+                let lookup = |c0: u32, c1| -> u32 {
+                    match (code >> (j * 2)) & 0x3 {
+                        0 => c0,
+                        1 => c1,
+                        2 => (2 * c0 + c1) / 3,
+                        3 => (c0 + 2 * c1) / 3,
+                        _ => unreachable!(),
+                    }
+                };
+
+                let alpha_nibble = (bytes[2 * (3 - i) + j / 2] >> (4 * (j % 2))) & 0xF;
+
+                let red0 = (color0 & 0xF800) >> 11;
+                let red1 = (color1 & 0xF800) >> 11;
+                let green0 = (color0 & 0x7E0) >> 5;
+                let green1 = (color1 & 0x7E0) >> 5;
+                let blue0 = color0 & 0x1F;
+                let blue1 = color1 & 0x1F;
+
+                // After colors and alpha have been calculated, inflate from 4/5/6-bit
+                // to 8-bit by multipling by 16/8/4, respectively.
+                [
+                    lookup(8 * red0, 8 * red1) as u8,
+                    lookup(4 * green0, 4 * green1) as u8,
+                    lookup(8 * blue0, 8 * blue1) as u8,
+                    16 * alpha_nibble,
+                ]
+            })
+            .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+    }
+
+    // Handles decoding a DXT5-compressed 128-bit buffer into 16 pixels
+    fn bytes_to_pixels_dxt5(bytes: &[u8]) -> Vec<[u8; 4]> {
+        let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
+        let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
+
+        let alpha0 = bytes[0] as u32;
+        let alpha1 = bytes[1] as u32;
+
+        // Convert 6 u8's into a single 48 bit number, to make it easier to grab 3-bit
+        // chunks out of them.
+        let alpha_info = bytes[2..8]
+        .iter()
+        .enumerate()
+        .fold(0u64, |memo, (i, &x)| memo + ((x as u64) << 8 * i) as u64);
+
+        bytes[12..]
+        .iter()
+        .rev()
+        .enumerate()
+        .flat_map(|(i, &code)| {
+            (0..4)
+            .map(|j| {
+                // Implements this lookup table for calculating pixel colors.
+                // Used on a per channel basis, except for calculating
+                // `color0 > color1`.
+                //
+                // code |      value      |
+                // ------------------------
+                //   0  |       c0        |
+                //   1  |       c1        |
+                //   2  | (2*c0 + c1) / 3 |
+                //   3  | (c0 + 2*c1) / 3 |
+                let lookup = |c0: u32, c1| -> u32 {
+                    match (code >> (j * 2)) & 0x3 {
+                        0 => c0,
+                        1 => c1,
+                        2 => (2 * c0 + c1) / 3,
+                        3 => (c0 + 2 * c1) / 3,
+                        _ => unreachable!(),
+                    }
+                };
+
+                let red0 = (color0 & 0xF800) >> 11;
+                let red1 = (color1 & 0xF800) >> 11;
+                let green0 = (color0 & 0x7E0) >> 5;
+                let green1 = (color1 & 0x7E0) >> 5;
+                let blue0 = color0 & 0x1F;
+                let blue1 = color1 & 0x1F;
+
+
+                // Interpolate between two given alpha values based on the 3-bit lookup value
+                // stored in `alpha_info`.
+                let alpha = match (alpha0 > alpha1, (alpha_info >> (3 * (4 * (3 - i) + j))) & 0x07) {
+                    (true, 0) => alpha0,
+                    (true, 1) => alpha1,
+                    (true, 2) => (6 * alpha0 + 1 * alpha1) / 7,
+                    (true, 3) => (5 * alpha0 + 2 * alpha1) / 7,
+                    (true, 4) => (4 * alpha0 + 3 * alpha1) / 7,
+                    (true, 5) => (3 * alpha0 + 4 * alpha1) / 7,
+                    (true, 6) => (2 * alpha0 + 5 * alpha1) / 7,
+                    (true, 7) => (1 * alpha0 + 6 * alpha1) / 7,
+                    (false, 0) => alpha0,
+                    (false, 1) => alpha1,
+                    (false, 2) => (4 * alpha0 + 1 * alpha1) / 5,
+                    (false, 3) => (3 * alpha0 + 2 * alpha1) / 5,
+                    (false, 4) => (2 * alpha0 + 3 * alpha1) / 5,
+                    (false, 5) => (1 * alpha0 + 4 * alpha1) / 5,
+                    (false, 6) => 0,
+                    (false, 7) => 255,
+                    t @ _ => unreachable!(format!("This value should not have occurred: `{:?}`", t)),
+                };
+
+                [
+                    lookup(8 * red0, 8 * red1) as u8,
+                    lookup(4 * green0, 4 * green1) as u8,
+                    lookup(8 * blue0, 8 * blue1) as u8,
+                    alpha as u8,
+                ]
+            })
+            .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+    }
+
+    // Handles decoding a DXT1-5 compressed buffer into a series of mipmap images
     // TODO: Decode non-square images
-    // TODO: Handle 1-bit alpha variant
-    fn decode_dxt1(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
+    // TODO: Handle DXT1 1-bit alpha variant
+    // TODO: Handle DXT2 and DXT4 images
+    fn decode_dxt(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
         let layer_sizes = header.get_layer_sizes();
 
         // Take the vec of layer sizes and map to a vec of layers
@@ -288,74 +482,28 @@ impl DDS {
             let h = cmp::max(height, 4);
             let w = cmp::max(width, 4);
 
+            // DXT1 compression uses 64 bits per 16 pixels, while DXT3-5 use 128 bits.
+            // Calculate how many total bytes to read out of the buffer for each layer
+            // here, as well as how big each individual chunk size is.
+            let (layer_bytes, chunk_size) = match header.compression {
+                Compression::DXT1 => (h * w / 2, 8),
+                _ => (h * w, 16),
+            };
+
             data_buf
             // Remove the pixels we care about from the buffer
-            .drain(..h * w / 2)
+            .drain(..layer_bytes)
             .collect::<Vec<_>>()
-            // Chunk into blocks of 64 bits, the basic DXT1 encoding block size
-            .chunks(8)
-            // Turn those 64 bit blocks into 16 `[u8; 4]` pixels, and flatten
-            // into a vec of pixels for the entire image. Follow here for the
-            // dirty details:
+             // Chunk into blocks of appropriate size
+            .chunks(chunk_size)
+            // Turn those blocks into 16 `[u8; 4]` pixels, and flatten into a
+            // vec of pixels for the entire image. Follow here for the dirty details:
             // https://www.khronos.org/opengl/wiki/S3_Texture_Compression
-            .flat_map(|bytes| {
-                // Convert to `u32` to allow overflow for arithmetic below
-                let color0 = (((bytes[1] as u16) << 8) + bytes[0] as u16) as u32;
-                let color1 = (((bytes[3] as u16) << 8) + bytes[2] as u16) as u32;
-
-                // Iterate through each pair of bits in each `code` byte to
-                // determine the color for each pixel
-                bytes[4..]
-                .iter()
-                .rev()
-                .flat_map(|&code| {
-                    (0..4)
-                    .map(|i| {
-                        // Implements this lookup table for calculating pixel colors.
-                        // Used on a per channel basis, except for calculating
-                        // `color0 > color1`.
-                        //
-                        // code | color0 > color1 | color0 <= color1
-                        // -----------------------------------------
-                        //   0  |       c0        |       c0
-                        //   1  |       c1        |       c1
-                        //   2  | (2*c0 + c1) / 3 |  (c0 + c1) / 2
-                        //   3  | (c0 + 2*c1) / 3 |      black
-                        let lookup = |c0: u32, c1| -> u32 {
-                            match (color0 > color1, (code >> (i * 2)) & 0x3) {
-                                ( true, 0) => c0,
-                                ( true, 1) => c1,
-                                ( true, 2) => (2 * c0 + c1) / 3,
-                                ( true, 3) => (c0 + 2 * c1) / 3,
-                                (false, 0) => c0,
-                                (false, 1) => c1,
-                                (false, 2) => (c0 + c1) / 2,
-                                (false, 3) => 0,
-                                _ => unreachable!(),
-                            }
-                        };
-
-                        let red0 = (color0 & 0xF800) >> 11;
-                        let red1 = (color1 & 0xF800) >> 11;
-                        let green0 = (color0 & 0x7E0) >> 5;
-                        let green1 = (color1 & 0x7E0) >> 5;
-                        let blue0 = color0 & 0x1F;
-                        let blue1 = color1 & 0x1F;
-
-                        // After colors have been calculated, inflate from 5/6-bit
-                        // to 8-bit by multipling by 8/4, respectively. No alpha
-                        // channel is used in DXT1 compression, so set to 100%
-                        // across the board.
-                        [
-                            lookup(8 * red0, 8 * red1) as u8,
-                            lookup(4 * green0, 4 * green1) as u8,
-                            lookup(8 * blue0, 8 * blue1) as u8,
-                            255
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
+            .flat_map(match header.compression {
+                Compression::DXT1 => DDS::bytes_to_pixels_dxt1,
+                Compression::DXT3 => DDS::bytes_to_pixels_dxt3,
+                Compression::DXT5 => DDS::bytes_to_pixels_dxt5,
+                _ => unreachable!(format!("This function cannot handle `{:?}` images", header.compression)),
             })
             .collect::<Vec<_>>()
             // Since the 16 byte pixel blocks are actually 4x4 texels, group image
@@ -381,186 +529,6 @@ impl DDS {
         .collect::<Vec<_>>()
     }
 
-    fn decode_dxt3(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
-        let layer_sizes = header.get_layer_sizes();
-
-        // Take the vec of layer sizes and map to a vec of layers
-        layer_sizes
-        .iter()
-        .map(|&(height, width)| {
-            let h = cmp::max(height, 4);
-            let w = cmp::max(width, 4);
-
-            data_buf
-            .drain(..h * w)
-            .collect::<Vec<_>>()
-            .chunks(16)
-            .flat_map(|bytes| {
-                let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
-                let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
-
-                bytes[12..]
-                .iter()
-                .rev()
-                .enumerate()
-                .flat_map(|(i, &code)| {
-                    (0..4)
-                    .map(|j| {
-                        let lookup = |c0: u32, c1| -> u32 {
-                            match (code >> (j * 2)) & 0x3 {
-                                0 => c0,
-                                1 => c1,
-                                2 => (2 * c0 + c1) / 3,
-                                3 => (c0 + 2 * c1) / 3,
-                                _ => unreachable!(),
-                            }
-                        };
-
-                        let alpha_nibble = (bytes[2 * (3 - i) + j / 2] >> (4 * (j % 2))) & 0xF;
-
-                        let red0 = (color0 & 0xF800) >> 11;
-                        let red1 = (color1 & 0xF800) >> 11;
-                        let green0 = (color0 & 0x7E0) >> 5;
-                        let green1 = (color1 & 0x7E0) >> 5;
-                        let blue0 = color0 & 0x1F;
-                        let blue1 = color1 & 0x1F;
-
-                        [
-                            lookup(8 * red0, 8 * red1) as u8,
-                            lookup(4 * green0, 4 * green1) as u8,
-                            lookup(8 * blue0, 8 * blue1) as u8,
-                            16 * alpha_nibble,
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()
-            .chunks(4 * w)
-            .flat_map(|p| {
-                let mut pixels = Vec::new();
-
-                for i in (0..4).rev() {
-                    for j in 0..w / 4 {
-                        pixels.push(p[(i + j * 4) * 4 + 0]);
-                        pixels.push(p[(i + j * 4) * 4 + 1]);
-                        pixels.push(p[(i + j * 4) * 4 + 2]);
-                        pixels.push(p[(i + j * 4) * 4 + 3]);
-                    }
-                }
-
-                pixels
-            })
-            .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>()
-    }
-
-    fn decode_dxt5(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
-        let layer_sizes = header.get_layer_sizes();
-
-        // Take the vec of layer sizes and map to a vec of layers
-        layer_sizes
-        .iter()
-        .map(|&(height, width)| {
-            let h = cmp::max(height, 4);
-            let w = cmp::max(width, 4);
-
-            data_buf
-            .drain(..h * w)
-            .collect::<Vec<_>>()
-            .chunks(16)
-            .flat_map(|bytes| {
-                let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
-                let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
-
-                let alpha0 = bytes[0] as u32;
-                let alpha1 = bytes[1] as u32;
-
-                // Convert 6 u8's into a single 48 bit number
-                let alpha_info = bytes[2..8]
-                .iter()
-                .rev()
-                .enumerate()
-                .fold(0u64, |memo, (i, &x)| memo + ((x as u64) << 8 * i) as u64);
-
-                bytes[12..]
-                .iter()
-                .rev()
-                .enumerate()
-                .flat_map(|(i, &code)| {
-                    (0..4)
-                    .map(|j| {
-                        let lookup = |c0: u32, c1| -> u32 {
-                            match (code >> (j * 2)) & 0x3 {
-                                0 => c0,
-                                1 => c1,
-                                2 => (2 * c0 + c1) / 3,
-                                3 => (c0 + 2 * c1) / 3,
-                                _ => unreachable!(),
-                            }
-                        };
-
-                        let red0 = (color0 & 0xF800) >> 11;
-                        let red1 = (color1 & 0xF800) >> 11;
-                        let green0 = (color0 & 0x7E0) >> 5;
-                        let green1 = (color1 & 0x7E0) >> 5;
-                        let blue0 = color0 & 0x1F;
-                        let blue1 = color1 & 0x1F;
-
-                        let alpha = match (alpha0 <= alpha1, alpha_info >> (4 * i + j) & 0x07) {
-                            (true, 0) => alpha0,
-                            (true, 1) => alpha1,
-                            (true, 2) => (6 * alpha0 + 1 * alpha1) / 7,
-                            (true, 3) => (5 * alpha0 + 2 * alpha1) / 7,
-                            (true, 4) => (4 * alpha0 + 3 * alpha1) / 7,
-                            (true, 5) => (3 * alpha0 + 4 * alpha1) / 7,
-                            (true, 6) => (2 * alpha0 + 5 * alpha1) / 7,
-                            (true, 7) => (1 * alpha0 + 6 * alpha1) / 7,
-                            (false, 0) => alpha0,
-                            (false, 1) => alpha1,
-                            (false, 2) => (4 * alpha0 + 1 * alpha1) / 5,
-                            (false, 3) => (3 * alpha0 + 2 * alpha1) / 5,
-                            (false, 4) => (2 * alpha0 + 3 * alpha1) / 5,
-                            (false, 5) => (1 * alpha0 + 4 * alpha1) / 5,
-                            (false, 6) => 0,
-                            (false, 7) => 255,
-                            i @ _ => unreachable!(format!("{:?}", i)),
-                        };
-
-                        [
-                            lookup(8 * red0, 8 * red1) as u8,
-                            lookup(4 * green0, 4 * green1) as u8,
-                            lookup(8 * blue0, 8 * blue1) as u8,
-                            alpha as u8,
-                        ]
-                    })
-                    .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>()
-            .chunks(4 * w)
-            .flat_map(|p| {
-                let mut pixels = Vec::new();
-
-                for i in (0..4).rev() {
-                    for j in 0..w / 4 {
-                        pixels.push(p[(i + j * 4) * 4 + 0]);
-                        pixels.push(p[(i + j * 4) * 4 + 1]);
-                        pixels.push(p[(i + j * 4) * 4 + 2]);
-                        pixels.push(p[(i + j * 4) * 4 + 3]);
-                    }
-                }
-
-                pixels
-            })
-            .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>()
-    }
-
     /// Decodes a buffer into a header and a series of mipmap images.
     /// Handles uncompressed and DXT1-5 compressed images.
     pub fn decode<R: Read>(buf: &mut R) -> Option<DDS> {
@@ -573,14 +541,8 @@ impl DDS {
             Compression::None => {
                 DDS::decode_uncompressed(&header, &mut data_buf)
             }
-            Compression::DXT1 => {
-                DDS::decode_dxt1(&header, &mut data_buf)
-            }
-            Compression::DXT3 => {
-                DDS::decode_dxt3(&header, &mut data_buf)
-            }
-            Compression::DXT5 => {
-                DDS::decode_dxt5(&header, &mut data_buf)
+            Compression::DXT1 | Compression::DXT3 | Compression::DXT5 => {
+                DDS::decode_dxt(&header, &mut data_buf)
             }
             _ => {
                 return None;
