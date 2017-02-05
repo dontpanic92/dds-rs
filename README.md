@@ -1,15 +1,15 @@
 dds-rs
 ======
 
-A library for decoding and encoding DirectDraw Surface files. Currently supports
-decoding these texture files:
+A library for decoding and encoding DirectDraw Surface files. Current
+supported format matrix:
 
 | Compression | Decoding | Encoding |
 |:-----------:|:--------:|:--------:|
 |    None     |    X     |          |
 |    DXT1     |    X     |          |
-|   DXT2/3    |          |          |
-|   DXT4/5    |          |          |
+|   DXT2/3    |    X     |          |
+|   DXT4/5    |    X     |          |
 
 
 Examples
