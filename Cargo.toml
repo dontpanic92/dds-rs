@@ -3,7 +3,6 @@ name = "dds-rs"
 version = "0.2.0"
 authors = ["mechaxl"]
 description = "Decodes DirectDraw Surface files"
-documentation = "https://docs.rs/dds-rs/"
 repository = "https://gitlab.com/mechaxl/dds-rs"
 keywords = ["dds", "directdraw"]
 categories = ["game-engines", "multimedia::images"]
