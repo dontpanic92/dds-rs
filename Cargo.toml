@@ -1,6 +1,6 @@
 [package]
 name = "dds-rs"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["mechaxl"]
 description = "Decodes DirectDraw Surface files"
 repository = "https://gitlab.com/mechaxl/dds-rs"
@@ -12,17 +12,15 @@ license = "LGPL-3.0"
 name = "dds"
 path = "src/lib.rs"
 
-[[bin]]
-name = "dds-info"
-path = "src/main.rs"
-
-[dependencies]
-clap = "2.20.1"
-prettytable-rs = "0.6.6"
-
 [dev-dependencies]
 image = "0.12.2"
+clap = "2.20.1"
+prettytable-rs = "0.6.6"
 
 [[example]]
 name = "convert"
 path = "examples/convert/main.rs"
+
+[[example]]
+name = "info"
+path = "examples/info/main.rs"
