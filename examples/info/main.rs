@@ -20,13 +20,13 @@ fn main() {
             .index(1))
         .get_matches();
 
-    let file = File::open(matches.value_of("INPUT").unwrap()).expect("Couldn't find file!");
+    let filename = matches.value_of("INPUT").unwrap_or("examples/assets/ground.dds");
+    let file = File::open(filename).expect("Couldn't find file!");
     let mut reader = BufReader::new(file);
 
     let header = DDS::parse_header(&mut reader).unwrap();
 
     let raw = header.get_raw();
-
 
     ptable!(
         ["Attribute", "Value"],

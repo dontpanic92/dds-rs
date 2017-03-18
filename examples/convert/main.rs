@@ -21,7 +21,7 @@ fn main() {
             .index(1))
         .get_matches();
 
-    let filename = matches.value_of("INPUT").unwrap_or("examples/convert/ground.dds");
+    let filename = matches.value_of("INPUT").unwrap_or("examples/assets/ground.dds");
 
     let file = File::open(filename).expect("Couldn't find file!");
     let mut reader = BufReader::new(file);
