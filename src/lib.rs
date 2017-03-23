@@ -12,7 +12,7 @@
 //! use dds::DDS;
 //!
 //! fn main() {
-//!     let file = File::open(Path::new("foo.dds")).unwrap();
+//!     let file = File::open(Path::new("examples/assets/ground.dds")).unwrap();
 //!     let mut reader = BufReader::new(file);
 //!
 //!     let dds = DDS::decode(&mut reader).unwrap();
@@ -20,13 +20,74 @@
 //! ```
 
 // General TODOs:
-// - Remove use of unsafe
 // - Handle Cubemaps/Volumes
+
+#[macro_use]
+extern crate serde_derive;
+extern crate bincode;
+extern crate serde;
+
+use bincode::{serialize, deserialize, Infinite, ErrorKind};
 
 use std::cmp;
 use std::fmt;
-use std::io::Read;
-use std::mem;
+use std::io;
+
+
+
+/// Normalized internal RGBA pixel representation
+pub type Pixel = [u8; 4];
+
+/// Represents an error encountered while parsing a DDS file
+#[derive(Debug)]
+pub enum ParseError {
+    IO(io::Error),
+    Deserialize(Box<ErrorKind>),
+    Parse(String),
+}
+
+impl From<io::Error> for ParseError {
+    fn from(err: io::Error) -> ParseError {
+        ParseError::IO(err)
+    }
+}
+
+impl<'a> From<&'a str> for ParseError {
+    fn from(err: &'a str) -> ParseError {
+        ParseError::Parse(err.into())
+    }
+}
+
+impl From<String> for ParseError {
+    fn from(err: String) -> ParseError {
+        ParseError::Parse(err.into())
+    }
+}
+
+impl From<Box<ErrorKind>> for ParseError {
+    fn from(err: Box<ErrorKind>) -> ParseError {
+        ParseError::Deserialize(err)
+    }
+}
+
+/// Represents an error encountered while encoding
+/// a `Vec<Pixel>` into `Vec<u8>`.
+#[derive(Debug)]
+pub enum EncodeError {
+    Encode(String),
+}
+
+impl<'a> From<&'a str> for EncodeError {
+    fn from(err: &'a str) -> EncodeError {
+        EncodeError::Encode(err.into())
+    }
+}
+
+impl From<String> for EncodeError {
+    fn from(err: String) -> EncodeError {
+        EncodeError::Encode(err.into())
+    }
+}
 
 
 /// Pixel information as represented in the DDS file
@@ -34,7 +95,7 @@ use std::mem;
 /// Direct translation of struct found here:
 /// https://msdn.microsoft.com/en-us/library/bb943984.aspx
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct RawPixelFormat {
     pub size: u32,
     pub flags: u32,
@@ -52,7 +113,7 @@ pub struct RawPixelFormat {
 /// Direct translation of struct found here:
 /// https://msdn.microsoft.com/en-us/library/bb943982.aspx
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct RawHeader {
     pub size: u32,
     pub flags: u32,
@@ -110,6 +171,7 @@ impl fmt::Display for PixelFormat {
 #[derive(Debug)]
 pub enum Compression {
     DXT1,
+    DXT2,
     DXT3,
     DXT5,
     None,
@@ -121,6 +183,7 @@ impl Compression {
         match bytes {
             b"\x00\x00\x00\x00" => Compression::None,
             b"DXT1" => Compression::DXT1,
+            b"DXT2" => Compression::DXT2,
             b"DXT3" => Compression::DXT3,
             b"DXT5" => Compression::DXT5,
             _ => Compression::Other(bytes[0], bytes[1], bytes[2], bytes[3]),
@@ -189,7 +252,7 @@ pub struct DDS {
     pub header: Header,
 
     /// Mipmap layers
-    pub layers: Vec<Vec<[u8; 4]>>,
+    pub layers: Vec<Vec<Pixel>>,
 }
 
 
@@ -223,22 +286,22 @@ impl DDS {
     }
 
     /// Parses a `Header` object from a raw `u8` buffer.
-    pub fn parse_header<R: Read>(buf: &mut R) -> Option<Header> {
+    pub fn parse_header<R: io::Read>(buf: &mut R) -> Result<Header, ParseError> {
         let mut magic_buf = [0; 4];
         let mut header_buf = [0u8; 124];
 
-        buf.read_exact(&mut magic_buf[..]).unwrap();
+        buf.read_exact(&mut magic_buf[..]).expect("Not enough bytes to read magic bytes!");
 
         // If the file doesn't start with `DDS `, abort decoding
         if &magic_buf != b"DDS " {
-            return None;
+            return Err(format!("Expected the file to start with `DDS `, got `{}` instead.", String::from_utf8_lossy(&magic_buf)).into());
         }
 
-        buf.read_exact(&mut header_buf[..]).unwrap();
+        buf.read_exact(&mut header_buf[..]).expect("Not enough bytes to read header!");
 
-        let raw_header: RawHeader = unsafe { mem::transmute(header_buf) };
+        let raw_header: RawHeader = deserialize(&header_buf[..])?;
 
-        Some(Header {
+        Ok(Header {
             height: raw_header.height,
             width: raw_header.width,
             mipmap_count: raw_header.mipmap_count,
@@ -249,7 +312,7 @@ impl DDS {
     }
 
     // Handles decoding an uncompressed buffer into a series of mipmap images
-    fn decode_uncompressed(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
+    fn decode_uncompressed(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<Pixel>> {
         let layer_sizes = header.get_layer_sizes();
 
         // Take the vec of layer sizes and map to a vec of layers
@@ -262,13 +325,20 @@ impl DDS {
             .collect::<Vec<_>>()
             // Chunk into groups of 3 or 4, then convert to normalized [u8; 4] RGBA format
             .chunks(header.get_pixel_bytes())
-            .map(|p| match header.pixel_format {
-                // TODO: Actually handle raw bit masks. Should we not actually
-                // use the pretty-parsed values and do bit masks only?
-                PixelFormat::X8R8G8B8 => [p[2], p[1], p[0], 255],
-                PixelFormat::A8R8G8B8 => [p[2], p[1], p[0], p[3]],
-                PixelFormat::Unknown => [p[0], p[1], p[2], p[3]],
-                _ => [p[0], p[1], p[2], p[3]],
+            .map(|p| {
+                let pixel: u32 = p[0] as u32 + ((p[1] as u32) << 8) + ((p[2] as u32) << 16) + ((p[3] as u32) << 24);
+
+                let red = header.raw_header.pixel_format.red_bit_mask;
+                let green = header.raw_header.pixel_format.green_bit_mask;
+                let blue = header.raw_header.pixel_format.blue_bit_mask;
+                let alpha = header.raw_header.pixel_format.alpha_bit_mask;
+
+                [
+                    ((pixel & red) >> red.trailing_zeros()) as u8,
+                    ((pixel & green) >> green.trailing_zeros()) as u8,
+                    ((pixel & blue) >> blue.trailing_zeros()) as u8,
+                    ((pixel & alpha) >> alpha.trailing_zeros()) as u8,
+                ]
             })
             .collect()
         })
@@ -276,7 +346,7 @@ impl DDS {
     }
 
     // Handles decoding a DXT1-compressed 64-bit buffer into 16 pixels
-    fn bytes_to_pixels_dxt1(bytes: &[u8]) -> Vec<[u8; 4]> {
+    fn bytes_to_pixels_dxt1(bytes: &[u8]) -> Vec<Pixel> {
         // Convert to `u32` to allow overflow for arithmetic below
         let color0 = (((bytes[1] as u16) << 8) + bytes[0] as u16) as u32;
         let color1 = (((bytes[3] as u16) << 8) + bytes[2] as u16) as u32;
@@ -337,7 +407,7 @@ impl DDS {
     }
 
     // Handles decoding a DXT3-compressed 128-bit buffer into 16 pixels
-    fn bytes_to_pixels_dxt3(bytes: &[u8]) -> Vec<[u8; 4]> {
+    fn bytes_to_pixels_dxt3(bytes: &[u8]) -> Vec<Pixel> {
         // Convert to `u32` to allow overflow for arithmetic below
         let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
         let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
@@ -385,7 +455,7 @@ impl DDS {
     }
 
     // Handles decoding a DXT5-compressed 128-bit buffer into 16 pixels
-    fn bytes_to_pixels_dxt5(bytes: &[u8]) -> Vec<[u8; 4]> {
+    fn bytes_to_pixels_dxt5(bytes: &[u8]) -> Vec<Pixel> {
         let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
         let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
 
@@ -472,7 +542,7 @@ impl DDS {
     // TODO: Decode non-square images
     // TODO: Handle DXT1 1-bit alpha variant
     // TODO: Handle DXT2 and DXT4 images
-    fn decode_dxt(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<[u8; 4]>> {
+    fn decode_dxt(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<Pixel>> {
         let layer_sizes = header.get_layer_sizes();
 
         // Take the vec of layer sizes and map to a vec of layers
@@ -501,7 +571,7 @@ impl DDS {
             // https://www.khronos.org/opengl/wiki/S3_Texture_Compression
             .flat_map(match header.compression {
                 Compression::DXT1 => DDS::bytes_to_pixels_dxt1,
-                Compression::DXT3 => DDS::bytes_to_pixels_dxt3,
+                Compression::DXT2 | Compression::DXT3 => DDS::bytes_to_pixels_dxt3,
                 Compression::DXT5 => DDS::bytes_to_pixels_dxt5,
                 _ => unreachable!(format!("This function cannot handle `{:?}` images", header.compression)),
             })
@@ -531,11 +601,11 @@ impl DDS {
 
     /// Decodes a buffer into a header and a series of mipmap images.
     /// Handles uncompressed and DXT1-5 compressed images.
-    pub fn decode<R: Read>(buf: &mut R) -> Option<DDS> {
-        let header = DDS::parse_header(buf).unwrap();
+    pub fn decode<R: io::Read>(buf: &mut R) -> Result<DDS, ParseError> {
+        let header = DDS::parse_header(buf)?;
 
         let mut data_buf = Vec::new();
-        buf.read_to_end(&mut data_buf).unwrap();
+        buf.read_to_end(&mut data_buf)?;
 
         let layers = match header.compression {
             Compression::None => {
@@ -545,13 +615,73 @@ impl DDS {
                 DDS::decode_dxt(&header, &mut data_buf)
             }
             _ => {
-                return None;
+                let compression_type = String::from_utf8_lossy(&header.raw_header.pixel_format.four_cc[..]);
+                return Err(format!("The compression type `{}` is unsupported!", compression_type).into());
             }
         };
 
-        Some(DDS {
+        Ok(DDS {
             header: header,
             layers: layers,
         })
+    }
+
+    /// Encodes a series of Pixels as a bunch of bytes, suitable for writing to disk, etc.
+    /// Currently only supports uncompressed RGBA images
+    pub fn encode(pixels: &Vec<Pixel>, size: (u32, u32), compression: Compression) -> Result<Vec<u8>, EncodeError> {
+        // Make sure we don't have more/less data than claimed
+        if size.0 * size.1 < pixels.len() as u32 {
+            return Err(format!("Found {} extra bytes!", pixels.len() as u32 - size.0 * size.1).into());
+        }
+
+        if size.0 * size.1 > pixels.len() as u32 {
+            return Err(format!("Need {} extra bytes!", size.0 * size.1 - pixels.len() as u32).into());
+        }
+
+        // TODO: Remove this limitation
+        if size.0 != size.1 {
+            return Err("Non-square images not yet supported!".into());
+        }
+
+        match compression {
+            Compression::None => {
+                // Start with magic number
+                let mut data = b"DDS ".to_vec();
+
+                // Add header to buffer
+                data.extend(serialize(&RawHeader {
+                    size: size.0 * size.1 * 4,
+                    flags: 0,
+                    height: size.0,
+                    width: size.1,
+                    pitch_or_linear_size: 0,
+                    depth: 0,
+                    mipmap_count: 0,
+                    reserved: [0; 11],
+                    pixel_format: RawPixelFormat {
+                        size: 0,
+                        flags: 0x41,
+                        four_cc: [0; 4],
+                        rgb_bit_count: 32,
+                        red_bit_mask: 0xFF,
+                        green_bit_mask: 0xFF00,
+                        blue_bit_mask: 0xFF0000,
+                        alpha_bit_mask: 0xFF000000,
+                    },
+                    caps: 0,
+                    caps2: 0,
+                    caps3: 0,
+                    caps4: 0,
+                    reserved2: 0,
+                }, Infinite).unwrap());
+
+                // Add layers to buffer
+                data.extend(pixels.iter().flat_map(|p| p).collect::<Vec<_>>());
+
+                Ok(data)
+            }
+            _ => Err(format!("Cannot encode {:?}!", compression).into())
+        }
+
     }
 }

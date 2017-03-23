@@ -6,7 +6,7 @@ supported format matrix:
 
 | Compression | Decoding | Encoding |
 |:-----------:|:--------:|:--------:|
-|    None     |    X     |          |
+|    None     |    X     |    X     |
 |    DXT1     |    X     |          |
 |   DXT2/3    |    X     |          |
 |   DXT4/5    |    X     |          |
