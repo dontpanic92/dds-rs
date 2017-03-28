@@ -1,6 +1,6 @@
 [package]
 name = "dds-rs"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["mechaxl"]
 description = "Decodes DirectDraw Surface files"
 repository = "https://gitlab.com/mechaxl/dds-rs"
