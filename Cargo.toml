@@ -1,6 +1,6 @@
 [package]
 name = "dds-rs"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["mechaxl"]
 description = "Decodes DirectDraw Surface files"
 repository = "https://gitlab.com/mechaxl/dds-rs"
@@ -13,9 +13,9 @@ name = "dds"
 path = "src/lib.rs"
 
 [dependencies]
-bincode = "1.0.0-alpha5"
-serde = "0.9.*"
-serde_derive = "0.9.*"
+bincode = "0.8"
+serde = "1.0"
+serde_derive = "1.0"
 
 [dev-dependencies]
 image = "0.12.2"
