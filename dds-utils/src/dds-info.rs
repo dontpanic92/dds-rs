@@ -4,12 +4,12 @@ extern crate clap;
 extern crate prettytable;
 
 use std::fs::File;
-use std::io::BufReader;
-use std::str;
+use std::io::{BufReader, Seek, SeekFrom};
 
 use dds::DDS;
 
 use clap::{Arg, App};
+use prettytable::format;
 
 
 fn main() {
@@ -20,21 +20,25 @@ fn main() {
             .index(1))
         .get_matches();
 
-    let filename = matches.value_of("INPUT").unwrap_or("examples/assets/ground.dds");
+    let filename = matches.value_of("INPUT").unwrap_or("../assets/ground.dds");
     let file = File::open(filename).expect("Couldn't find file!");
     let mut reader = BufReader::new(file);
 
     let header = DDS::parse_header(&mut reader).unwrap();
+    reader.seek(SeekFrom::Start(0)).expect("Couldn't seek to file beginning!");
+    let raw = DDS::parse_header_raw(&mut reader).unwrap();
 
-    let raw = header.get_raw();
+    let pitch_linear_col_name = match raw.flags & 0x8 == 0{
+        false => "Pitch",
+        true => "Linear Size",
+    };
 
-    ptable!(
-        ["Attribute", "Value"],
+    let mut table = table!(
         ["Height", header.height],
         ["Width", header.width],
         ["Mipmaps", header.mipmap_count],
         ["Compression", header.compression],
-        ["Pitch/Linear Size", raw.pitch_or_linear_size],
+        [pitch_linear_col_name, raw.pitch_or_linear_size],
         ["Depth", raw.depth],
         ["Flags", format!("{:#010X}", raw.flags)],
         [" - PITCH", raw.flags & 0x8 != 0],
@@ -67,4 +71,8 @@ fn main() {
         [" - YUV", raw.pixel_format.flags & 0x200 != 0],
         [" - LUMINANCE", raw.pixel_format.flags & 0x20000 != 0]
     );
+
+    table.set_titles(row!["ATTRIBUTE", "VALUE"]);
+    table.set_format(*format::consts::FORMAT_NO_LINESEP_WITH_TITLE);
+    table.printstd();
 }
