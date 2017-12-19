@@ -12,7 +12,7 @@
 //! use dds::DDS;
 //!
 //! fn main() {
-//!     let file = File::open(Path::new("examples/assets/ground.dds")).unwrap();
+//!     let file = File::open(Path::new("../assets/dxt1.dds")).unwrap();
 //!     let mut reader = BufReader::new(file);
 //!
 //!     let dds = DDS::decode(&mut reader).unwrap();
@@ -25,6 +25,7 @@
 #[macro_use]
 extern crate serde_derive;
 extern crate bincode;
+extern crate rgb;
 extern crate serde;
 
 use bincode::{serialize, deserialize, Infinite, ErrorKind};
@@ -32,11 +33,8 @@ use bincode::{serialize, deserialize, Infinite, ErrorKind};
 use std::cmp;
 use std::fmt;
 use std::io;
+use rgb::{ComponentBytes, RGBA};
 
-
-
-/// Normalized internal RGBA pixel representation
-pub type Pixel = [u8; 4];
 
 /// Represents an error encountered while parsing a DDS file
 #[derive(Debug)]
@@ -71,7 +69,7 @@ impl From<Box<ErrorKind>> for ParseError {
 }
 
 /// Represents an error encountered while encoding
-/// a `Vec<Pixel>` into `Vec<u8>`.
+/// a `Vec<RGBA>` into `Vec<u8>`.
 #[derive(Debug)]
 pub enum EncodeError {
     Encode(String),
@@ -174,6 +172,7 @@ pub enum Compression {
     DXT2,
     DXT3,
     DXT5,
+    DX10,
     None,
     Other(u8, u8, u8, u8),
 }
@@ -186,6 +185,7 @@ impl Compression {
             b"DXT2" => Compression::DXT2,
             b"DXT3" => Compression::DXT3,
             b"DXT5" => Compression::DXT5,
+            b"DX10" => Compression::DX10,
             _ => Compression::Other(bytes[0], bytes[1], bytes[2], bytes[3]),
         }
     }
@@ -197,8 +197,7 @@ impl fmt::Display for Compression {
     }
 }
 
-/// Represents a parsed DDS header. Has several convenience attributes,
-/// as well as a reference to the raw header.
+/// Represents a parsed DDS header. Has several convenience attributes.
 #[derive(Debug)]
 pub struct Header {
     /// Height of the main image
@@ -213,11 +212,17 @@ pub struct Header {
     /// Compression type used
     pub compression: Compression,
 
+    /// The 4-character code for this image
+    pub fourcc: [u8; 4],
+
     /// The pixel format used
     pub pixel_format: PixelFormat,
 
-    /// Raw header that byte-matches the DDS header format
-    pub raw_header: RawHeader,
+    /// The number of bytes used per-pixel
+    pub pixel_bytes: usize,
+
+    /// The bit masks used for each channel
+    pub channel_masks: [u32; 4],
 }
 
 impl Header {
@@ -233,16 +238,6 @@ impl Header {
             ))
             .collect::<Vec<_>>()
     }
-
-    /// Returns raw header
-    pub fn get_raw(&self) -> &RawHeader {
-        &self.raw_header
-    }
-
-    // Returns the number of bytes used per pixel
-    fn get_pixel_bytes(&self) -> usize {
-        self.raw_header.pixel_format.rgb_bit_count as usize / 8
-    }
 }
 
 
@@ -252,7 +247,7 @@ pub struct DDS {
     pub header: Header,
 
     /// Mipmap layers
-    pub layers: Vec<Vec<Pixel>>,
+    pub layers: Vec<Vec<RGBA<u8>>>,
 }
 
 
@@ -287,6 +282,28 @@ impl DDS {
 
     /// Parses a `Header` object from a raw `u8` buffer.
     pub fn parse_header<R: io::Read>(buf: &mut R) -> Result<Header, ParseError> {
+        let raw_header = DDS::parse_header_raw(buf)?;
+
+        Ok(Header {
+            height: raw_header.height,
+            width: raw_header.width,
+            mipmap_count: raw_header.mipmap_count,
+            compression: Compression::from_bytes(&raw_header.pixel_format.four_cc),
+            fourcc: raw_header.pixel_format.four_cc,
+            pixel_format: DDS::parse_pixel_format(&raw_header),
+            pixel_bytes: raw_header.pixel_format.rgb_bit_count as usize / 8,
+            channel_masks: [
+                raw_header.pixel_format.red_bit_mask,
+                raw_header.pixel_format.green_bit_mask,
+                raw_header.pixel_format.blue_bit_mask,
+                raw_header.pixel_format.alpha_bit_mask,
+            ],
+        })
+    }
+
+    /// Parses the raw header from the image. Useful for getting information not contained
+    /// in the normal parsed Header struct.
+    pub fn parse_header_raw<R: io::Read>(buf: &mut R) -> Result<RawHeader, ParseError> {
         let mut magic_buf = [0; 4];
         let mut header_buf = [0u8; 124];
 
@@ -299,20 +316,11 @@ impl DDS {
 
         buf.read_exact(&mut header_buf[..]).expect("Not enough bytes to read header!");
 
-        let raw_header: RawHeader = deserialize(&header_buf[..])?;
-
-        Ok(Header {
-            height: raw_header.height,
-            width: raw_header.width,
-            mipmap_count: raw_header.mipmap_count,
-            compression: Compression::from_bytes(&raw_header.pixel_format.four_cc),
-            pixel_format: DDS::parse_pixel_format(&raw_header),
-            raw_header: raw_header,
-        })
+        Ok(deserialize(&header_buf[..])?)
     }
 
     // Handles decoding an uncompressed buffer into a series of mipmap images
-    fn decode_uncompressed(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<Pixel>> {
+    fn decode_uncompressed(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<RGBA<u8>>> {
         let layer_sizes = header.get_layer_sizes();
 
         // Take the vec of layer sizes and map to a vec of layers
@@ -321,24 +329,24 @@ impl DDS {
         .map(|&(h, w)| {
             data_buf
             // Remove the pixels we care about from the buffer
-            .drain(..h * w * header.get_pixel_bytes())
+            .drain(..h * w * header.pixel_bytes)
             .collect::<Vec<_>>()
             // Chunk into groups of 3 or 4, then convert to normalized [u8; 4] RGBA format
-            .chunks(header.get_pixel_bytes())
+            .chunks(header.pixel_bytes)
             .map(|p| {
                 let pixel: u32 = p[0] as u32 + ((p[1] as u32) << 8) + ((p[2] as u32) << 16) + ((p[3] as u32) << 24);
 
-                let red = header.raw_header.pixel_format.red_bit_mask;
-                let green = header.raw_header.pixel_format.green_bit_mask;
-                let blue = header.raw_header.pixel_format.blue_bit_mask;
-                let alpha = header.raw_header.pixel_format.alpha_bit_mask;
+                let red = header.channel_masks[0];
+                let green = header.channel_masks[1];
+                let blue = header.channel_masks[2];
+                let alpha = header.channel_masks[3];
 
-                [
-                    ((pixel & red) >> red.trailing_zeros()) as u8,
-                    ((pixel & green) >> green.trailing_zeros()) as u8,
-                    ((pixel & blue) >> blue.trailing_zeros()) as u8,
-                    ((pixel & alpha) >> alpha.trailing_zeros()) as u8,
-                ]
+                RGBA {
+                    r: ((pixel & red) >> red.trailing_zeros()) as u8,
+                    g: ((pixel & green) >> green.trailing_zeros()) as u8,
+                    b: ((pixel & blue) >> blue.trailing_zeros()) as u8,
+                    a: ((pixel & alpha) >> alpha.trailing_zeros()) as u8,
+                }
             })
             .collect()
         })
@@ -346,7 +354,7 @@ impl DDS {
     }
 
     // Handles decoding a DXT1-compressed 64-bit buffer into 16 pixels
-    fn bytes_to_pixels_dxt1(bytes: &[u8]) -> Vec<Pixel> {
+    fn bytes_to_pixels_dxt1(bytes: &[u8]) -> Vec<RGBA<u8>> {
         // Convert to `u32` to allow overflow for arithmetic below
         let color0 = (((bytes[1] as u16) << 8) + bytes[0] as u16) as u32;
         let color1 = (((bytes[3] as u16) << 8) + bytes[2] as u16) as u32;
@@ -394,12 +402,12 @@ impl DDS {
                 // to 8-bit by multipling by 8/4, respectively. No alpha
                 // channel is used in DXT1 compression, so set to 100%
                 // across the board.
-                [
-                    lookup(8 * red0, 8 * red1) as u8,
-                    lookup(4 * green0, 4 * green1) as u8,
-                    lookup(8 * blue0, 8 * blue1) as u8,
-                    255
-                ]
+                RGBA {
+                    r: lookup(8 * red0, 8 * red1) as u8,
+                    g: lookup(4 * green0, 4 * green1) as u8,
+                    b: lookup(8 * blue0, 8 * blue1) as u8,
+                    a: 255
+                }
             })
             .collect::<Vec<_>>()
         })
@@ -407,7 +415,7 @@ impl DDS {
     }
 
     // Handles decoding a DXT3-compressed 128-bit buffer into 16 pixels
-    fn bytes_to_pixels_dxt3(bytes: &[u8]) -> Vec<Pixel> {
+    fn bytes_to_pixels_dxt3(bytes: &[u8]) -> Vec<RGBA<u8>> {
         // Convert to `u32` to allow overflow for arithmetic below
         let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
         let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
@@ -442,12 +450,12 @@ impl DDS {
 
                 // After colors and alpha have been calculated, inflate from 4/5/6-bit
                 // to 8-bit by multipling by 16/8/4, respectively.
-                [
-                    lookup(8 * red0, 8 * red1) as u8,
-                    lookup(4 * green0, 4 * green1) as u8,
-                    lookup(8 * blue0, 8 * blue1) as u8,
-                    16 * alpha_nibble,
-                ]
+                RGBA {
+                    r: lookup(8 * red0, 8 * red1) as u8,
+                    g: lookup(4 * green0, 4 * green1) as u8,
+                    b: lookup(8 * blue0, 8 * blue1) as u8,
+                    a: 16 * alpha_nibble,
+                }
             })
             .collect::<Vec<_>>()
         })
@@ -455,7 +463,7 @@ impl DDS {
     }
 
     // Handles decoding a DXT5-compressed 128-bit buffer into 16 pixels
-    fn bytes_to_pixels_dxt5(bytes: &[u8]) -> Vec<Pixel> {
+    fn bytes_to_pixels_dxt5(bytes: &[u8]) -> Vec<RGBA<u8>> {
         let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
         let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
 
@@ -526,12 +534,12 @@ impl DDS {
                     t @ _ => unreachable!(format!("This value should not have occurred: `{:?}`", t)),
                 };
 
-                [
-                    lookup(8 * red0, 8 * red1) as u8,
-                    lookup(4 * green0, 4 * green1) as u8,
-                    lookup(8 * blue0, 8 * blue1) as u8,
-                    alpha as u8,
-                ]
+                RGBA {
+                    r: lookup(8 * red0, 8 * red1) as u8,
+                    g: lookup(4 * green0, 4 * green1) as u8,
+                    b: lookup(8 * blue0, 8 * blue1) as u8,
+                    a: alpha as u8,
+                }
             })
             .collect::<Vec<_>>()
         })
@@ -542,7 +550,7 @@ impl DDS {
     // TODO: Decode non-square images
     // TODO: Handle DXT1 1-bit alpha variant
     // TODO: Handle DXT2 and DXT4 images
-    fn decode_dxt(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<Pixel>> {
+    fn decode_dxt(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<RGBA<u8>>> {
         let layer_sizes = header.get_layer_sizes();
 
         // Take the vec of layer sizes and map to a vec of layers
@@ -615,7 +623,7 @@ impl DDS {
                 DDS::decode_dxt(&header, &mut data_buf)
             }
             _ => {
-                let compression_type = String::from_utf8_lossy(&header.raw_header.pixel_format.four_cc[..]);
+                let compression_type = String::from_utf8_lossy(&header.fourcc[..]);
                 return Err(format!("The compression type `{}` is unsupported!", compression_type).into());
             }
         };
@@ -628,7 +636,7 @@ impl DDS {
 
     /// Encodes a series of Pixels as a bunch of bytes, suitable for writing to disk, etc.
     /// Currently only supports uncompressed RGBA images
-    pub fn encode(pixels: &Vec<Pixel>, size: (u32, u32), compression: Compression) -> Result<Vec<u8>, EncodeError> {
+    pub fn encode(pixels: &Vec<RGBA<u8>>, size: (u32, u32), compression: Compression) -> Result<Vec<u8>, EncodeError> {
         // Make sure we don't have more/less data than claimed
         if size.0 * size.1 < pixels.len() as u32 {
             return Err(format!("Found {} extra bytes!", pixels.len() as u32 - size.0 * size.1).into());
@@ -676,7 +684,7 @@ impl DDS {
                 }, Infinite).unwrap());
 
                 // Add layers to buffer
-                data.extend(pixels.iter().flat_map(|p| p).collect::<Vec<_>>());
+                data.extend(pixels.as_bytes());
 
                 Ok(data)
             }

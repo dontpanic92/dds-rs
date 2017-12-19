@@ -1,4 +1,3 @@
 target
 Cargo.lock
-examples/output/*
-samples/*
+dds-utils/output/*

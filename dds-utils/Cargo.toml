@@ -1,0 +1,23 @@
+[package]
+name = "dds-utils"
+version = "0.1.0"
+authors = ["mechaxl"]
+
+[dependencies]
+clap = "2.20.1"
+dds-rs = { path = "../dds-rs" }
+image = "0.12.2"
+prettytable-rs = "0.6.6"
+rgb = "0.8"
+
+[[bin]]
+name = "dds-info"
+path = "src/dds-info.rs"
+
+[[bin]]
+name = "dds-convert"
+path = "src/dds-convert.rs"
+
+[[bin]]
+name = "dds-generate"
+path = "src/dds-generate.rs"
