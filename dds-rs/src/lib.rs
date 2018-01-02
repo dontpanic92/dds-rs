@@ -12,7 +12,7 @@
 //! use dds::DDS;
 //!
 //! fn main() {
-//!     let file = File::open(Path::new("../assets/dxt1.dds")).unwrap();
+//!     let file = File::open(Path::new("../examples/dxt1.dds")).unwrap();
 //!     let mut reader = BufReader::new(file);
 //!
 //!     let dds = DDS::decode(&mut reader).unwrap();
