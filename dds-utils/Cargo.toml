@@ -4,10 +4,10 @@ version = "0.1.0"
 authors = ["mechaxl"]
 
 [dependencies]
-clap = "2.20.1"
+clap = "2.29"
 dds-rs = { path = "../dds-rs" }
-image = "0.12.2"
-prettytable-rs = "0.6.6"
+image = "0.18"
+prettytable-rs = "0.6"
 rgb = "0.8"
 
 [[bin]]

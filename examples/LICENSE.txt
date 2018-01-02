@@ -3,7 +3,3 @@ ground.dds was released under a CC-BY-SA 3.0 license by Wildfire Games:
 http://opengameart.org/content/0-ad-textures
 http://creativecommons.org/licenses/by-sa/3.0/
 http://www.wildfiregames.com/
-
-dxt1.dds and dxt5.dds were released under an MIT license:
-
-https://github.com/Jam3/parse-dds/blob/master/LICENSE.md

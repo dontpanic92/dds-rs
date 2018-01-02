@@ -1,0 +1,3 @@
+The files in this directory were released under an LGPLv3 license:
+
+https://github.com/qt/qtimageformats/blob/5.10/LICENSE.LGPL3

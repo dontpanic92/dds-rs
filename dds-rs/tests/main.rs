@@ -58,7 +58,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_basic() {
+    fn test_uncompressed() {
         let pixels = vec![0u8; 64];
 
         let bytes = DDS::encode(&pixels.as_rgba().into(), (4, 4), Compression::None).unwrap();
@@ -70,10 +70,22 @@ mod tests {
     }
 
     #[test]
+    fn test_uncompressed_rectangular() {
+        let pixels: Vec<_> = (0u8..128).collect();
+
+        let bytes = DDS::encode(&pixels.as_rgba().into(), (4, 8), Compression::None).unwrap();
+
+        let dds = DDS::decode(&mut Cursor::new(bytes)).unwrap();
+
+        assert_eq!(dds.layers.len(), 1);
+        assert_eq!(pixels, dds.layers[0].as_bytes());
+    }
+
+    #[test]
     fn test_dxt1() {
         let mut buf = Vec::new();
 
-        let mut file = File::open("../assets/dxt1.dds").expect("Couldn't find file!");
+        let mut file = File::open("../examples/dxt1.dds").expect("Couldn't find file!");
 
         file.read_to_end(&mut buf).unwrap();
 
@@ -90,7 +102,7 @@ mod tests {
     fn test_dxt5() {
         let mut buf = Vec::new();
 
-        let mut file = File::open("../assets/dxt5.dds").expect("Couldn't find file!");
+        let mut file = File::open("../examples/dxt5.dds").expect("Couldn't find file!");
 
         file.read_to_end(&mut buf).unwrap();
 

@@ -12,6 +12,9 @@ stable:cargo:
   # Ensure documentation builds
   - cargo doc
 
+  # Ensure that dds-utils runs properly
+  - cd dds-utils && cargo run --bin dds-info ../examples/dxt1.dds
+
 beta:cargo:
   image: rustdocker/rust:beta
   script:
@@ -23,6 +26,9 @@ beta:cargo:
 
   # Ensure documentation builds
   - cargo doc
+
+  # Ensure that dds-utils runs properly
+  - cd dds-utils && cargo run --bin dds-info ../examples/dxt1.dds
 
 nightly:cargo:
   image: rustdocker/rust:nightly
@@ -38,3 +44,6 @@ nightly:cargo:
 
   # Ensure documentation builds
   - cargo doc
+
+  # Ensure that dds-utils runs properly
+  - cd dds-utils && cargo run --bin dds-info ../examples/dxt1.dds

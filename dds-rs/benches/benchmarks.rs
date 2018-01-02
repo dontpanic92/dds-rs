@@ -17,7 +17,7 @@ mod tests {
     #[bench]
     fn bench_decode(b: &mut Bencher) {
         let mut buf = Vec::new();
-        let mut file = File::open("../assets/ground.dds").expect("Couldn't find file!");
+        let mut file = File::open("../examples/ground.dds").expect("Couldn't find file!");
 
         file.read_to_end(&mut buf).unwrap();
 
