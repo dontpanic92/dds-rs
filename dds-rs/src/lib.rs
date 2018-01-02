@@ -12,15 +12,13 @@
 //! use dds::DDS;
 //!
 //! fn main() {
-//!     let file = File::open(Path::new("../assets/dxt1.dds")).unwrap();
+//!     let file = File::open(Path::new("../examples/dxt1.dds")).unwrap();
 //!     let mut reader = BufReader::new(file);
 //!
 //!     let dds = DDS::decode(&mut reader).unwrap();
 //! }
 //! ```
 
-// General TODOs:
-// - Handle Cubemaps/Volumes
 
 #[macro_use]
 extern crate serde_derive;
@@ -58,7 +56,7 @@ impl<'a> From<&'a str> for ParseError {
 
 impl From<String> for ParseError {
     fn from(err: String) -> ParseError {
-        ParseError::Parse(err.into())
+        ParseError::Parse(err)
     }
 }
 
@@ -83,7 +81,7 @@ impl<'a> From<&'a str> for EncodeError {
 
 impl From<String> for EncodeError {
     fn from(err: String) -> EncodeError {
-        EncodeError::Encode(err.into())
+        EncodeError::Encode(err)
     }
 }
 
@@ -129,12 +127,11 @@ pub struct RawHeader {
     pub reserved2: u32,
 }
 
-
 /// Convenience enum for storing common pixel formats
 ///
 /// See here for more information about the common formats:
 /// https://msdn.microsoft.com/en-us/library/bb943991.aspx
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum PixelFormat {
     A1R5G5B5,
     A2B10G10R10,
@@ -171,6 +168,7 @@ pub enum Compression {
     DXT1,
     DXT2,
     DXT3,
+    DXT4,
     DXT5,
     DX10,
     None,
@@ -184,6 +182,7 @@ impl Compression {
             b"DXT1" => Compression::DXT1,
             b"DXT2" => Compression::DXT2,
             b"DXT3" => Compression::DXT3,
+            b"DXT4" => Compression::DXT4,
             b"DXT5" => Compression::DXT5,
             b"DX10" => Compression::DX10,
             _ => Compression::Other(bytes[0], bytes[1], bytes[2], bytes[3]),
@@ -318,7 +317,6 @@ impl DDS {
 
         Ok(deserialize(&header_buf[..])?)
     }
-
     // Handles decoding an uncompressed buffer into a series of mipmap images
     fn decode_uncompressed(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<RGBA<u8>>> {
         let layer_sizes = header.get_layer_sizes();
@@ -336,16 +334,17 @@ impl DDS {
             .map(|p| {
                 let pixel: u32 = p[0] as u32 + ((p[1] as u32) << 8) + ((p[2] as u32) << 16) + ((p[3] as u32) << 24);
 
-                let red = header.channel_masks[0];
-                let green = header.channel_masks[1];
-                let blue = header.channel_masks[2];
-                let alpha = header.channel_masks[3];
+                // Given a mask, we first take the bits we care about and shift them down to start
+                // at 0. After that, we convert them to being in the range [0, 256)
+                let convert = |mask: u32| -> u8 {
+                    ((pixel & mask) >> mask.trailing_zeros() * 255 / (2u32.pow(mask.count_ones()) - 1)) as u8
+                };
 
                 RGBA {
-                    r: ((pixel & red) >> red.trailing_zeros()) as u8,
-                    g: ((pixel & green) >> green.trailing_zeros()) as u8,
-                    b: ((pixel & blue) >> blue.trailing_zeros()) as u8,
-                    a: ((pixel & alpha) >> alpha.trailing_zeros()) as u8,
+                    r: convert(header.channel_masks[0]),
+                    g: convert(header.channel_masks[1]),
+                    b: convert(header.channel_masks[2]),
+                    a: convert(header.channel_masks[3]),
                 }
             })
             .collect()
@@ -353,8 +352,9 @@ impl DDS {
         .collect()
     }
 
-    // Handles decoding a DXT1-compressed 64-bit buffer into 16 pixels
-    fn bytes_to_pixels_dxt1(bytes: &[u8]) -> Vec<RGBA<u8>> {
+    // Handles decoding a DXT1-compressed 64-bit buffer into 16 pixels. Handles 1-bit alpha variant
+    // with `alpha` parameter
+    fn bytes_to_pixels_dxt1(bytes: &[u8], alpha: bool) -> Vec<RGBA<u8>> {
         // Convert to `u32` to allow overflow for arithmetic below
         let color0 = (((bytes[1] as u16) << 8) + bytes[0] as u16) as u32;
         let color1 = (((bytes[3] as u16) << 8) + bytes[2] as u16) as u32;
@@ -377,16 +377,22 @@ impl DDS {
                 //   1  |       c1        |       c1
                 //   2  | (2*c0 + c1) / 3 |  (c0 + c1) / 2
                 //   3  | (c0 + 2*c1) / 3 |      black
-                let lookup = |c0: u32, c1| -> u32 {
+                //
+                // Returns an Option to differentiate between a black pixel and a transparent pixel
+                let lookup = |c0: u32, c1: u32, inflate_by: u32| {
+                    // Inflate colors from 5/6-bit to 8-bit
+                    let c0 = c0 * 255 / (2u32.pow(inflate_by) - 1);
+                    let c1 = c1 * 255 / (2u32.pow(inflate_by) - 1);
+
                     match (color0 > color1, (code >> (i * 2)) & 0x3) {
-                        ( true, 0) => c0,
-                        ( true, 1) => c1,
-                        ( true, 2) => (2 * c0 + c1) / 3,
-                        ( true, 3) => (c0 + 2 * c1) / 3,
-                        (false, 0) => c0,
-                        (false, 1) => c1,
-                        (false, 2) => (c0 + c1) / 2,
-                        (false, 3) => 0,
+                        ( true, 0) => Some(c0),
+                        ( true, 1) => Some(c1),
+                        ( true, 2) => Some((2 * c0 + c1) / 3),
+                        ( true, 3) => Some((c0 + 2 * c1) / 3),
+                        (false, 0) => Some(c0),
+                        (false, 1) => Some(c1),
+                        (false, 2) => Some((c0 + c1) / 2),
+                        (false, 3) => None,
                         _ => unreachable!(),
                     }
                 };
@@ -398,15 +404,22 @@ impl DDS {
                 let blue0 = color0 & 0x1F;
                 let blue1 = color1 & 0x1F;
 
-                // After colors have been calculated, inflate from 5/6-bit
-                // to 8-bit by multipling by 8/4, respectively. No alpha
-                // channel is used in DXT1 compression, so set to 100%
-                // across the board.
+                // Calculate actual colors. If alpha is disabled or if any channel is non-black,
+                // show the pixel. Otherwise, hide it.
+                let r = lookup(red0, red1, 5);
+                let g = lookup(green0, green1, 6);
+                let b = lookup(blue0, blue1, 5);
+                let a = if !alpha || r.is_some() || g.is_some() || b.is_some() {
+                    255
+                } else {
+                    0
+                };
+
                 RGBA {
-                    r: lookup(8 * red0, 8 * red1) as u8,
-                    g: lookup(4 * green0, 4 * green1) as u8,
-                    b: lookup(8 * blue0, 8 * blue1) as u8,
-                    a: 255
+                    r: r.unwrap_or(0) as u8,
+                    g: g.unwrap_or(0) as u8,
+                    b: b.unwrap_or(0) as u8,
+                    a,
                 }
             })
             .collect::<Vec<_>>()
@@ -414,7 +427,7 @@ impl DDS {
         .collect::<Vec<_>>()
     }
 
-    // Handles decoding a DXT3-compressed 128-bit buffer into 16 pixels
+    // Handles decoding a DXT2/3-compressed 128-bit buffer into 16 pixels
     fn bytes_to_pixels_dxt3(bytes: &[u8]) -> Vec<RGBA<u8>> {
         // Convert to `u32` to allow overflow for arithmetic below
         let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
@@ -429,7 +442,11 @@ impl DDS {
         .flat_map(|(i, &code)| {
             (0..4)
             .map(|j| {
-                let lookup = |c0: u32, c1| -> u32 {
+                let lookup = |c0: u32, c1: u32, inflate_by: u32| -> u32 {
+                    // Inflate colors from 5/6-bit to 8-bit
+                    let c0 = c0 * 255 / (2u32.pow(inflate_by) - 1);
+                    let c1 = c1 * 255 / (2u32.pow(inflate_by) - 1);
+
                     match (code >> (j * 2)) & 0x3 {
                         0 => c0,
                         1 => c1,
@@ -448,13 +465,11 @@ impl DDS {
                 let blue0 = color0 & 0x1F;
                 let blue1 = color1 & 0x1F;
 
-                // After colors and alpha have been calculated, inflate from 4/5/6-bit
-                // to 8-bit by multipling by 16/8/4, respectively.
                 RGBA {
-                    r: lookup(8 * red0, 8 * red1) as u8,
-                    g: lookup(4 * green0, 4 * green1) as u8,
-                    b: lookup(8 * blue0, 8 * blue1) as u8,
-                    a: 16 * alpha_nibble,
+                    r: lookup(red0, red1, 5) as u8,
+                    g: lookup(green0, green1, 6) as u8,
+                    b: lookup(blue0, blue1, 5) as u8,
+                    a: (alpha_nibble as u32 * 255 / 15) as u8,
                 }
             })
             .collect::<Vec<_>>()
@@ -462,7 +477,7 @@ impl DDS {
         .collect::<Vec<_>>()
     }
 
-    // Handles decoding a DXT5-compressed 128-bit buffer into 16 pixels
+    // Handles decoding a DXT4/5-compressed 128-bit buffer into 16 pixels
     fn bytes_to_pixels_dxt5(bytes: &[u8]) -> Vec<RGBA<u8>> {
         let color0 = (((bytes[9] as u16) << 8) + bytes[8] as u16) as u32;
         let color1 = (((bytes[11] as u16) << 8) + bytes[10] as u16) as u32;
@@ -494,7 +509,11 @@ impl DDS {
                 //   1  |       c1        |
                 //   2  | (2*c0 + c1) / 3 |
                 //   3  | (c0 + 2*c1) / 3 |
-                let lookup = |c0: u32, c1| -> u32 {
+                let lookup = |c0: u32, c1: u32, inflate_by: u32| -> u32 {
+                    // Inflate colors from 5/6-bit to 8-bit
+                    let c0 = c0 * 255 / (2u32.pow(inflate_by) - 1);
+                    let c1 = c1 * 255 / (2u32.pow(inflate_by) - 1);
+
                     match (code >> (j * 2)) & 0x3 {
                         0 => c0,
                         1 => c1,
@@ -531,13 +550,13 @@ impl DDS {
                     (false, 5) => (1 * alpha0 + 4 * alpha1) / 5,
                     (false, 6) => 0,
                     (false, 7) => 255,
-                    t @ _ => unreachable!(format!("This value should not have occurred: `{:?}`", t)),
+                    t => unreachable!(format!("This value should not have occurred: `{:?}`", t)),
                 };
 
                 RGBA {
-                    r: lookup(8 * red0, 8 * red1) as u8,
-                    g: lookup(4 * green0, 4 * green1) as u8,
-                    b: lookup(8 * blue0, 8 * blue1) as u8,
+                    r: lookup(red0, red1, 5) as u8,
+                    g: lookup(green0, green1, 6) as u8,
+                    b: lookup(blue0, blue1, 5) as u8,
                     a: alpha as u8,
                 }
             })
@@ -547,9 +566,6 @@ impl DDS {
     }
 
     // Handles decoding a DXT1-5 compressed buffer into a series of mipmap images
-    // TODO: Decode non-square images
-    // TODO: Handle DXT1 1-bit alpha variant
-    // TODO: Handle DXT2 and DXT4 images
     fn decode_dxt(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<RGBA<u8>>> {
         let layer_sizes = header.get_layer_sizes();
 
@@ -557,15 +573,35 @@ impl DDS {
         layer_sizes
         .iter()
         .map(|&(height, width)| {
-            let h = cmp::max(height, 4);
-            let w = cmp::max(width, 4);
+            // We calculate the actual height and width here. Although the given height/width
+            // can go down to 1, the block sizes are minimum 4x4, which we enforce here. We
+            // then also round up to the nearest even divisor of 4. For example, a 47x49 texture
+            // is actually stored as a 48x52 texture.
+            let h = (cmp::max(height, 4)  as f32 / 4.0).ceil() as usize * 4;
+            let w = (cmp::max(width, 4)  as f32 / 4.0).ceil() as usize * 4;
 
-            // DXT1 compression uses 64 bits per 16 pixels, while DXT3-5 use 128 bits.
+            // DXT1 compression uses 64 bits per 16 pixels, while DXT2-5 use 128 bits.
             // Calculate how many total bytes to read out of the buffer for each layer
             // here, as well as how big each individual chunk size is.
             let (layer_bytes, chunk_size) = match header.compression {
                 Compression::DXT1 => (h * w / 2, 8),
                 _ => (h * w, 16),
+            };
+
+            // Pulled out to here because it doesn't like being in the `flat_map` call without
+            // type hinting. Kind of ugly with all the boxes and closures, but otherwise get an
+            // error about incompatible match arm types.
+            let chunk_transform: Box<Fn(&[u8]) -> Vec<RGBA<u8>>> = match header.compression {
+                Compression::DXT1 => Box::new(|chunk|
+                    DDS::bytes_to_pixels_dxt1(chunk, header.pixel_format != PixelFormat::Unknown)
+                ),
+                Compression::DXT2 | Compression::DXT3 => Box::new(|chunk|
+                    DDS::bytes_to_pixels_dxt3(chunk)
+                ),
+                Compression::DXT4 | Compression::DXT5 => Box::new(|chunk|
+                    DDS::bytes_to_pixels_dxt5(chunk)
+                ),
+                _ => unreachable!(format!("This function cannot handle `{:?}` images", header.compression)),
             };
 
             data_buf
@@ -577,12 +613,7 @@ impl DDS {
             // Turn those blocks into 16 `[u8; 4]` pixels, and flatten into a
             // vec of pixels for the entire image. Follow here for the dirty details:
             // https://www.khronos.org/opengl/wiki/S3_Texture_Compression
-            .flat_map(match header.compression {
-                Compression::DXT1 => DDS::bytes_to_pixels_dxt1,
-                Compression::DXT2 | Compression::DXT3 => DDS::bytes_to_pixels_dxt3,
-                Compression::DXT5 => DDS::bytes_to_pixels_dxt5,
-                _ => unreachable!(format!("This function cannot handle `{:?}` images", header.compression)),
-            })
+            .flat_map(|chunk| chunk_transform(chunk))
             .collect::<Vec<_>>()
             // Since the 16 byte pixel blocks are actually 4x4 texels, group image
             // into chunks of four rows each, and then transpose into a row of texels.
@@ -592,10 +623,18 @@ impl DDS {
 
                 for i in (0..4).rev() {
                     for j in 0..w / 4 {
-                        pixels.push(p[(i + j * 4) * 4 + 0]);
-                        pixels.push(p[(i + j * 4) * 4 + 1]);
-                        pixels.push(p[(i + j * 4) * 4 + 2]);
-                        pixels.push(p[(i + j * 4) * 4 + 3]);
+                        // If this is the last block in a row and the image width is not evenly
+                        // divisible by 4, we only push enough pixels to fill the rest of the block
+                        // width.
+                        let block_width = if j + 1 == w / 4 {
+                            4 - (w - width)
+                        } else {
+                            4
+                        };
+
+                        for k in 0..block_width {
+                            pixels.push(p[(i + j * 4) * 4 + k]);
+                        }
                     }
                 }
 
@@ -619,7 +658,7 @@ impl DDS {
             Compression::None => {
                 DDS::decode_uncompressed(&header, &mut data_buf)
             }
-            Compression::DXT1 | Compression::DXT3 | Compression::DXT5 => {
+            Compression::DXT1 | Compression::DXT2| Compression::DXT3 | Compression::DXT4 | Compression::DXT5 => {
                 DDS::decode_dxt(&header, &mut data_buf)
             }
             _ => {
@@ -629,8 +668,8 @@ impl DDS {
         };
 
         Ok(DDS {
-            header: header,
-            layers: layers,
+            header,
+            layers,
         })
     }
 
@@ -644,11 +683,6 @@ impl DDS {
 
         if size.0 * size.1 > pixels.len() as u32 {
             return Err(format!("Need {} extra bytes!", size.0 * size.1 - pixels.len() as u32).into());
-        }
-
-        // TODO: Remove this limitation
-        if size.0 != size.1 {
-            return Err("Non-square images not yet supported!".into());
         }
 
         match compression {

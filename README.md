@@ -9,15 +9,9 @@ dds-rs
 Introduction
 ------------
 
-A library for decoding and encoding DirectDraw Surface files. Current
-supported format matrix:
-
-| Compression | Decoding | Encoding |
-|:-----------:|:--------:|:--------:|
-|    None     |    X     |    X     |
-|    DXT1     |    X     |          |
-|   DXT2/3    |    X     |          |
-|   DXT4/5    |    X     |          |
+A library for decoding and encoding DirectDraw Surface files. Currently handles decoding some uncompressed DX9 formats,
+as well as DXT1-5. Supports encoding in the A8R8G8B8 format. Support for cubemaps and volumes, as well as DX10 is
+planned.
 
 
 Project Layout
@@ -27,7 +21,7 @@ The `dds-rs` crate lives in the `dds-rs` subdirectory of this repo. There also
 exist several utilities in `dds-utils` that may eventually get published to
 crates.io. They also function as examples of how to use `dds-rs`.
 
-Example assets can be found under `assets/`.
+Example input files can be found under `examples/`.
 
 
 Examples

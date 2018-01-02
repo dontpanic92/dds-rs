@@ -26,7 +26,7 @@ fn main() {
             .index(1))
         .get_matches();
 
-    let filename = matches.value_of("INPUT").unwrap_or("../assets/ground.dds");
+    let filename = matches.value_of("INPUT").unwrap_or("../examples/ground.dds");
 
     let file = File::open(filename).expect("Couldn't find file!");
     let mut reader = BufReader::new(file);
@@ -43,14 +43,14 @@ fn main() {
         let height = dds.header.height / 2u32.pow(i as u32);
         let width = dds.header.width / 2u32.pow(i as u32);
 
-        let mut imgbuf = image::ImageBuffer::new(height, width);
+        let mut imgbuf = image::ImageBuffer::new(width, height);
 
         for (x, y, pixel) in imgbuf.enumerate_pixels_mut() {
-            *pixel = *image::Rgba::from_slice(layer[(x + height * y) as usize].as_slice());
+            *pixel = *image::Rgba::from_slice(layer[(x + width * y) as usize].as_slice());
         }
 
         let path = format!("output/test-{}.png", height);
-        let ref mut fout = File::create(&Path::new(path.as_str())).unwrap();
-        let _ = image::ImageRgba8(imgbuf).save(fout, image::PNG);
+        let fout = &mut File::create(&Path::new(path.as_str())).unwrap();
+        image::ImageRgba8(imgbuf).save(fout, image::PNG).unwrap();
     }
 }

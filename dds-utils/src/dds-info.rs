@@ -20,7 +20,7 @@ fn main() {
             .index(1))
         .get_matches();
 
-    let filename = matches.value_of("INPUT").unwrap_or("../assets/ground.dds");
+    let filename = matches.value_of("INPUT").unwrap_or("../examples/ground.dds");
     let file = File::open(filename).expect("Couldn't find file!");
     let mut reader = BufReader::new(file);
 
@@ -28,10 +28,7 @@ fn main() {
     reader.seek(SeekFrom::Start(0)).expect("Couldn't seek to file beginning!");
     let raw = DDS::parse_header_raw(&mut reader).unwrap();
 
-    let pitch_linear_col_name = match raw.flags & 0x8 == 0{
-        false => "Pitch",
-        true => "Linear Size",
-    };
+    let pitch_linear_col_name = if raw.flags & 0x8 == 1 { "Pitch" } else { "Linear Size" };
 
     let mut table = table!(
         ["Height", header.height],
@@ -42,13 +39,13 @@ fn main() {
         ["Depth", raw.depth],
         ["Flags", format!("{:#010X}", raw.flags)],
         [" - PITCH", raw.flags & 0x8 != 0],
-        [" - MIPMAPCOUNT", raw.flags & 0x20000 != 0],
-        [" - LINEARSIZE", raw.flags & 0x80000 != 0],
-        [" - DEPTH", raw.flags & 0x800000 != 0],
+        [" - MIPMAPCOUNT", raw.flags & 0x20_000 != 0],
+        [" - LINEARSIZE", raw.flags & 0x80_000 != 0],
+        [" - DEPTH", raw.flags & 0x800_000 != 0],
         ["Details", format!("{:#010X}\n{:#010X}", raw.caps, raw.caps2)],
         [" - COMPLEX", raw.caps & 0x8 != 0],
         [" - TEXTURE", raw.caps & 0x1000 != 0],
-        [" - MIPMAP", raw.caps & 0x400000 != 0],
+        [" - MIPMAP", raw.caps & 0x400_000 != 0],
         [" - CUBEMAP", raw.caps2 & 0x200 != 0],
         [" - CUBEMAP_POSITIVEX", raw.caps2 & 0x400 != 0],
         [" - CUBEMAP_NEGATIVEX", raw.caps2 & 0x800 != 0],
@@ -69,7 +66,7 @@ fn main() {
         [" - FOURCC", raw.pixel_format.flags & 0x4 != 0],
         [" - RGB", raw.pixel_format.flags & 0x40 != 0],
         [" - YUV", raw.pixel_format.flags & 0x200 != 0],
-        [" - LUMINANCE", raw.pixel_format.flags & 0x20000 != 0]
+        [" - LUMINANCE", raw.pixel_format.flags & 0x20_000 != 0]
     );
 
     table.set_titles(row!["ATTRIBUTE", "VALUE"]);
