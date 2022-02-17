@@ -33,7 +33,7 @@ use alloc::boxed::Box;
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use bincode::{deserialize, serialize, ErrorKind};
+use bincode::{decode_from_slice, encode_to_vec, error::DecodeError};
 
 use core::cmp;
 use core::fmt;
@@ -41,11 +41,14 @@ use rgb::{ComponentBytes, RGBA};
 
 use core2::io;
 
+#[cfg(not(feature = "std"))]
+use num_traits::float::FloatCore;
+
 /// Represents an error encountered while parsing a DDS file
 #[derive(Debug)]
 pub enum ParseError {
     IO(io::Error),
-    Deserialize(Box<ErrorKind>),
+    Deserialize(DecodeError),
     Parse(String),
 }
 
@@ -67,8 +70,8 @@ impl From<String> for ParseError {
     }
 }
 
-impl From<Box<ErrorKind>> for ParseError {
-    fn from(err: Box<ErrorKind>) -> ParseError {
+impl From<DecodeError> for ParseError {
+    fn from(err: DecodeError) -> ParseError {
         ParseError::Deserialize(err)
     }
 }
@@ -97,7 +100,7 @@ impl From<String> for EncodeError {
 /// Direct translation of struct found here:
 /// https://msdn.microsoft.com/en-us/library/bb943984.aspx
 #[repr(C)]
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, bincode::Encode, bincode::Decode, PartialEq, Debug)]
 pub struct RawPixelFormat {
     pub size: u32,
     pub flags: u32,
@@ -114,7 +117,7 @@ pub struct RawPixelFormat {
 /// Direct translation of struct found here:
 /// https://msdn.microsoft.com/en-us/library/bb943982.aspx
 #[repr(C)]
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[derive(Serialize, Deserialize, bincode::Encode, bincode::Decode, PartialEq, Debug)]
 pub struct RawHeader {
     pub size: u32,
     pub flags: u32,
@@ -332,7 +335,7 @@ impl DDS {
         buf.read_exact(&mut header_buf[..])
             .expect("Not enough bytes to read header!");
 
-        Ok(deserialize(&header_buf[..])?)
+        Ok(decode_from_slice(&header_buf[..], bincode::config::legacy())?.0)
     }
     // Handles decoding an uncompressed buffer into a series of mipmap images
     fn decode_uncompressed(header: &Header, data_buf: &mut Vec<u8>) -> Vec<Vec<RGBA<u8>>> {
@@ -732,31 +735,34 @@ impl DDS {
 
                 // Add header to buffer
                 data.extend(
-                    serialize(&RawHeader {
-                        size: size.0 * size.1 * 4,
-                        flags: 0,
-                        height: size.0,
-                        width: size.1,
-                        pitch_or_linear_size: 0,
-                        depth: 0,
-                        mipmap_count: 0,
-                        reserved: [0; 11],
-                        pixel_format: RawPixelFormat {
-                            size: 0,
-                            flags: 0x41,
-                            four_cc: [0; 4],
-                            rgb_bit_count: 32,
-                            red_bit_mask: 0xFF,
-                            green_bit_mask: 0xFF00,
-                            blue_bit_mask: 0xFF0000,
-                            alpha_bit_mask: 0xFF000000,
+                    encode_to_vec(
+                        &RawHeader {
+                            size: size.0 * size.1 * 4,
+                            flags: 0,
+                            height: size.0,
+                            width: size.1,
+                            pitch_or_linear_size: 0,
+                            depth: 0,
+                            mipmap_count: 0,
+                            reserved: [0; 11],
+                            pixel_format: RawPixelFormat {
+                                size: 0,
+                                flags: 0x41,
+                                four_cc: [0; 4],
+                                rgb_bit_count: 32,
+                                red_bit_mask: 0xFF,
+                                green_bit_mask: 0xFF00,
+                                blue_bit_mask: 0xFF0000,
+                                alpha_bit_mask: 0xFF000000,
+                            },
+                            caps: 0,
+                            caps2: 0,
+                            caps3: 0,
+                            caps4: 0,
+                            reserved2: 0,
                         },
-                        caps: 0,
-                        caps2: 0,
-                        caps3: 0,
-                        caps4: 0,
-                        reserved2: 0,
-                    })
+                        bincode::config::legacy(),
+                    )
                     .unwrap(),
                 );
 
