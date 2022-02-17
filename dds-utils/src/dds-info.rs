@@ -1,5 +1,5 @@
-extern crate dds;
 extern crate clap;
+extern crate dds;
 #[macro_use]
 extern crate prettytable;
 
@@ -8,27 +8,36 @@ use std::io::{BufReader, Seek, SeekFrom};
 
 use dds::DDS;
 
-use clap::{Arg, App};
+use clap::{App, Arg};
 use prettytable::format;
-
 
 fn main() {
     let matches = App::new("dds-info")
-        .arg(Arg::with_name("INPUT")
-            .help("Sets the input file to use")
-            .required(true)
-            .index(1))
+        .arg(
+            Arg::with_name("INPUT")
+                .help("Sets the input file to use")
+                .required(true)
+                .index(1),
+        )
         .get_matches();
 
-    let filename = matches.value_of("INPUT").unwrap_or("../examples/ground.dds");
+    let filename = matches
+        .value_of("INPUT")
+        .unwrap_or("../examples/ground.dds");
     let file = File::open(filename).expect("Couldn't find file!");
     let mut reader = BufReader::new(file);
 
     let header = DDS::parse_header(&mut reader).unwrap();
-    reader.seek(SeekFrom::Start(0)).expect("Couldn't seek to file beginning!");
+    reader
+        .seek(SeekFrom::Start(0))
+        .expect("Couldn't seek to file beginning!");
     let raw = DDS::parse_header_raw(&mut reader).unwrap();
 
-    let pitch_linear_col_name = if raw.flags & 0x8 == 1 { "Pitch" } else { "Linear Size" };
+    let pitch_linear_col_name = if raw.flags & 0x8 == 1 {
+        "Pitch"
+    } else {
+        "Linear Size"
+    };
 
     let mut table = table!(
         ["Height", header.height],
@@ -42,7 +51,10 @@ fn main() {
         [" - MIPMAPCOUNT", raw.flags & 0x20_000 != 0],
         [" - LINEARSIZE", raw.flags & 0x80_000 != 0],
         [" - DEPTH", raw.flags & 0x800_000 != 0],
-        ["Details", format!("{:#010X}\n{:#010X}", raw.caps, raw.caps2)],
+        [
+            "Details",
+            format!("{:#010X}\n{:#010X}", raw.caps, raw.caps2)
+        ],
         [" - COMPLEX", raw.caps & 0x8 != 0],
         [" - TEXTURE", raw.caps & 0x1000 != 0],
         [" - MIPMAP", raw.caps & 0x400_000 != 0],
@@ -56,11 +68,26 @@ fn main() {
         [" - VOLUME", raw.caps2 & 0x200_000 != 0],
         ["Pixel Format", header.pixel_format],
         ["Bits per pixel", raw.pixel_format.rgb_bit_count],
-        ["Red Mask", format!("{:#010X}", raw.pixel_format.red_bit_mask)],
-        ["Blue Mask", format!("{:#010X}", raw.pixel_format.blue_bit_mask)],
-        ["Green Mask", format!("{:#010X}", raw.pixel_format.green_bit_mask)],
-        ["Alpha Mask", format!("{:#010X}", raw.pixel_format.alpha_bit_mask)],
-        ["Pixel Format Flags", format!("{:#010X}", raw.pixel_format.flags)],
+        [
+            "Red Mask",
+            format!("{:#010X}", raw.pixel_format.red_bit_mask)
+        ],
+        [
+            "Blue Mask",
+            format!("{:#010X}", raw.pixel_format.blue_bit_mask)
+        ],
+        [
+            "Green Mask",
+            format!("{:#010X}", raw.pixel_format.green_bit_mask)
+        ],
+        [
+            "Alpha Mask",
+            format!("{:#010X}", raw.pixel_format.alpha_bit_mask)
+        ],
+        [
+            "Pixel Format Flags",
+            format!("{:#010X}", raw.pixel_format.flags)
+        ],
         [" - ALPHAPIXELS", raw.pixel_format.flags & 0x1 != 0],
         [" - ALPHA", raw.pixel_format.flags & 0x2 != 0],
         [" - FOURCC", raw.pixel_format.flags & 0x4 != 0],

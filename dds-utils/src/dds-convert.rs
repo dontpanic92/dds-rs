@@ -8,25 +8,28 @@ extern crate rgb;
 
 use std::fs::File;
 use std::io::BufReader;
+use std::iter::Iterator;
 use std::path::Path;
 use std::process::exit;
-use std::iter::Iterator;
 
 use dds::DDS;
 
-use clap::{Arg, App};
-use rgb::ComponentSlice;
+use clap::{App, Arg};
 use image::Pixel;
-
+use rgb::ComponentSlice;
 
 fn main() {
     let matches = App::new("convert")
-        .arg(Arg::with_name("INPUT")
-            .help("Sets the input file to use")
-            .index(1))
+        .arg(
+            Arg::with_name("INPUT")
+                .help("Sets the input file to use")
+                .index(1),
+        )
         .get_matches();
 
-    let filename = matches.value_of("INPUT").unwrap_or("../examples/ground.dds");
+    let filename = matches
+        .value_of("INPUT")
+        .unwrap_or("../examples/ground.dds");
 
     let file = File::open(filename).expect("Couldn't find file!");
     let mut reader = BufReader::new(file);

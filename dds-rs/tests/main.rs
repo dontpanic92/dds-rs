@@ -1,15 +1,13 @@
 extern crate dds;
-extern crate rgb;
 extern crate image;
+extern crate rgb;
 
-
-use dds::{DDS, Compression};
-use std::fs::File;
-use std::io::Cursor;
-use rgb::{ComponentBytes, FromSlice};
+use dds::{Compression, DDS};
 use image::GenericImage;
+use rgb::{ComponentBytes, FromSlice};
+use std::fs::File;
 use std::io::BufReader;
-
+use std::io::Cursor;
 
 fn compare_dds_to_png(dds_path: String, png_path: String) {
     let mut reader = BufReader::new(File::open(dds_path).unwrap());
@@ -19,18 +17,29 @@ fn compare_dds_to_png(dds_path: String, png_path: String) {
 
     let width = img.width() as usize;
     for (x, y, pixel) in img.pixels() {
-        assert_eq!(pixel.data[0], dds.layers[0][x as usize + y as usize * width].r);
-        assert_eq!(pixel.data[1], dds.layers[0][x as usize + y as usize * width].g);
-        assert_eq!(pixel.data[2], dds.layers[0][x as usize + y as usize * width].b);
-        assert_eq!(pixel.data[3], dds.layers[0][x as usize + y as usize * width].a);
+        assert_eq!(
+            pixel.data[0],
+            dds.layers[0][x as usize + y as usize * width].r
+        );
+        assert_eq!(
+            pixel.data[1],
+            dds.layers[0][x as usize + y as usize * width].g
+        );
+        assert_eq!(
+            pixel.data[2],
+            dds.layers[0][x as usize + y as usize * width].b
+        );
+        assert_eq!(
+            pixel.data[3],
+            dds.layers[0][x as usize + y as usize * width].a
+        );
     }
 }
 
-
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
     use super::*;
+    use std::io::Read;
 
     #[test]
     fn test_encode_uncompressed() {
